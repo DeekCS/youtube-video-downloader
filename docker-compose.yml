@@ -1,0 +1,58 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=development
+      - DEBUG=true
+      - API_V1_PREFIX=/api/v1
+      - CORS_ORIGINS=http://localhost:3000
+      - LOG_LEVEL=DEBUG
+      - PORT=8000
+      # yt-dlp speed tuning (aggressive + anti-throttling)
+      - YTDLP_CONCURRENT_FRAGMENTS=32
+      - YTDLP_HTTP_CHUNK_SIZE=
+      - YTDLP_STREAM_CHUNK_SIZE=2097152
+      - YTDLP_USE_ARIA2C=true
+      - YTDLP_ARIA2C_MAX_CONNECTIONS=16
+      - YTDLP_BUFFER_SIZE=1M
+      - YTDLP_SOCKET_TIMEOUT=60
+      - YTDLP_FILE_ACCESS_RETRIES=5
+      # Anti-throttling (YouTube workarounds)
+      - YTDLP_THROTTLED_RATE=50K
+      - YTDLP_USE_IOS_CLIENT=true
+      - YTDLP_PREFER_FREE_FORMATS=true
+      - YTDLP_USER_AGENT=Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1
+      # Optional: Enable to use your browser cookies (requires browser on host)
+      # - YTDLP_COOKIES_FROM_BROWSER=chrome
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    command: pnpm dev
+
+networks:
+  default:
+    name: video-downloader-network
