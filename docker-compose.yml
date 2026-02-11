@@ -9,9 +9,9 @@ services:
       - ENV=development
       - DEBUG=true
       - API_V1_PREFIX=/api/v1
-      - CORS_ORIGINS=http://localhost:3000
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
       - LOG_LEVEL=DEBUG
-      - PORT=8000
+      - PORT=${PORT:-8000}
       # yt-dlp speed tuning (aggressive + anti-throttling)
       - YTDLP_CONCURRENT_FRAGMENTS=32
       - YTDLP_HTTP_CHUNK_SIZE=
@@ -44,7 +44,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1
+      - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE:-http://localhost:8000/api/v1}
     volumes:
       - ./frontend:/app
       - /app/node_modules
