@@ -6,11 +6,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - ENV=development
-      - DEBUG=true
+      - ENV=${ENV:-production}
+      - DEBUG=${DEBUG:-false}
       - API_V1_PREFIX=/api/v1
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PORT=${PORT:-8000}
       # yt-dlp speed tuning (aggressive + anti-throttling)
       - YTDLP_CONCURRENT_FRAGMENTS=32
@@ -26,11 +26,7 @@ services:
       - YTDLP_USE_IOS_CLIENT=true
       - YTDLP_PREFER_FREE_FORMATS=true
       - YTDLP_USER_AGENT=Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1
-      # Optional: Enable to use your browser cookies (requires browser on host)
-      # - YTDLP_COOKIES_FROM_BROWSER=chrome
-    volumes:
-      - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -40,18 +36,16 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000/api/v1}
     ports:
       - "3000:3000"
     environment:
+      - NODE_ENV=${NODE_ENV:-production}
       - NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE:-http://localhost:8000/api/v1}
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
-    depends_on:
-      - backend
-    command: pnpm dev
+      - PORT=3000
+    command: node server.js
 
 networks:
   default:
