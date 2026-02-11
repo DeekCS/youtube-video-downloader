@@ -46,6 +46,8 @@ Both services will be deployed from the same monorepo using Railway's root direc
    - **Root Directory**: `backend`
    - **Builder**: Docker (will auto-detect the Dockerfile)
 
+> **Note**: Railway injects a `PORT` environment variable. The Dockerfile is already configured to use `${PORT:-8000}`, so no additional port configuration is needed.
+
 ### 2.3 Configure Backend Environment Variables
 
 Go to the Backend service **Variables** tab and add:
@@ -219,10 +221,10 @@ Now that you have the frontend URL, go back to the Backend service and update `C
 
 ### Increase Uvicorn Workers
 
-Edit `backend/Dockerfile` `CMD` line:
+The backend Dockerfile uses Railway's `PORT` env var automatically. To increase workers, edit the `CMD` line in `backend/Dockerfile`:
 
 ```dockerfile
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"
 ```
 
 Redeploy the Backend service.

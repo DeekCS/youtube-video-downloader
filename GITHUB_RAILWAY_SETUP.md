@@ -41,46 +41,52 @@ Alternative: Use GitHub CLI if installed (`gh auth login`)
    - Click "Connect GitHub" or "GitHub App"
    - Authorize Railway to access your repositories
    - Select the `youtube-video-downloader` repository
-   - Railway automatically detects services from `docker-compose.yml`
 
-3. Configure deploy settings:
+3. **Create two services** (Railway monorepo approach):
+
+   **Backend Service:**
+   - Click "+ New Service" → Select your repo
+   - Go to **Settings** → Set **Root Directory** to `backend`
+   - Builder: Docker (auto-detected from Dockerfile)
+   - Railway auto-injects `PORT` env var; the backend uses it
+
+   **Frontend Service:**
+   - Click "+ New Service" → Select your repo again
+   - Go to **Settings** → Set **Root Directory** to `frontend`
+   - Builder: Nixpacks (auto-detects Next.js)
+
+4. Configure deploy settings:
    - **Watch branch:** Set to `main`
    - **Auto-deploy on push:** Should be enabled by default
 
 ## Step 4: Deploy Backend Service
 
-After Railway connects to GitHub:
+After creating both services:
 
 1. Go to your Railway project
 2. Click on the **Backend** service
-3. In the **Deploy** tab, you should see:
-   - Source: `GitHub`
-   - Repo: `youtube-video-downloader`
-   - Branch: `main`
-   - Status: Ready to deploy
+3. Add environment variables in the **Variables** tab:
+   ```env
+   ENV=production
+   CORS_ORIGINS=https://your-frontend-url.up.railway.app
+   ```
+4. Go to **Settings** → **Networking** → **Generate Domain**
+5. Click **Deploy** to trigger the first deployment
+6. Once deployed, note the public URL (e.g., `https://backend-abc123.up.railway.app`)
 
-4. Click **Deploy** to trigger the first deployment
-
-5. Once deployed, Railway provides a public URL - this will be your backend API endpoint
-
-## Step 5: Update Frontend API URL
+## Step 5: Set Frontend API URL
 
 After backend is deployed on Railway:
 
-1. Note the Railway backend public URL (e.g., `https://your-app-xyz.railway.app`)
-2. Update [frontend/lib/env.ts](../frontend/lib/env.ts):
-   ```typescript
-   export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://your-app-xyz.railway.app'
+1. Note the Railway backend public URL (e.g., `https://your-backend-xyz.railway.app`)
+2. In Railway, go to your **Frontend** service → **Variables** tab
+3. Add this environment variable:
+   ```env
+   NEXT_PUBLIC_API_BASE=https://your-backend-xyz.railway.app/api/v1
    ```
+   > **Important**: Include `/api/v1` at the end of the URL
 
-3. Push this change:
-   ```bash
-   git add frontend/lib/env.ts
-   git commit -m "Update API URL for Railway deployment"
-   git push
-   ```
-
-4. Railway auto-deploys the frontend update
+4. Redeploy the frontend service to pick up the new variable
 
 ## Step 6: Test Deployed Services
 
