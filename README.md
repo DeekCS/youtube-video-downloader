@@ -279,3 +279,4 @@ Contributions welcome! Please:
 ---
 
 **Built with ❤️ using FastAPI, Next.js, and yt-dlp**
+# Last updated: Fri Feb 13 13:51:02 +03 2026
