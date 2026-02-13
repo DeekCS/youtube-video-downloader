@@ -167,6 +167,8 @@ export interface DownloadProgress {
   speed: string
   eta: string
   file_size: number
+  downloaded_bytes: number
+  total_bytes: number
   error?: string
 }
 

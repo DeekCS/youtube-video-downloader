@@ -58,10 +58,26 @@ MERGE_TIERS = [
 
 # Regex helpers for parsing yt-dlp progress output (used with --newline)
 _PROGRESS_PCT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
+_SIZE_OF_RE = re.compile(r"of\s+~?([\d.]+)\s*(\S+)")
 _SPEED_RE = re.compile(r"at\s+([\d.]+\s*\S+/s)")
 _ETA_RE = re.compile(r"ETA\s+(\S+)")
 _DESTINATION_RE = re.compile(r"\[download\]\s+Destination:")
 _MERGER_RE = re.compile(r"\[Merger\]")
+
+_SIZE_UNITS: dict[str, float] = {
+    "B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3,
+    "KB": 1000, "MB": 1000**2, "GB": 1000**3,
+    "kB": 1000, "k": 1000,
+}
+
+
+def _parse_size_bytes(value: str, unit: str) -> int:
+    """Convert a size string like '422.93' + 'KiB' to integer bytes."""
+    multiplier = _SIZE_UNITS.get(unit, 1)
+    try:
+        return int(float(value) * multiplier)
+    except (ValueError, OverflowError):
+        return 0
 
 class YtDlpService:
     """Service for interacting with yt-dlp."""
@@ -745,6 +761,28 @@ class YtDlpService:
                         else:
                             task.progress = raw * 0.90
                         task.progress = min(task.progress, 91.0)
+
+                        # Parse total size (e.g. "of 422.93KiB")
+                        size_m = _SIZE_OF_RE.search(line)
+                        if size_m:
+                            stream_bytes = _parse_size_bytes(
+                                size_m.group(1), size_m.group(2)
+                            )
+                            if is_two_stream:
+                                # Accumulate: first stream adds to base
+                                if stream_index <= 0:
+                                    task.total_bytes = stream_bytes
+                                elif stream_bytes > 0:
+                                    # Video already counted; add audio
+                                    # (only update once when audio starts)
+                                    base = task.total_bytes
+                                    if base < stream_bytes * 5:
+                                        task.total_bytes = base + stream_bytes
+                            else:
+                                task.total_bytes = stream_bytes
+                            task.downloaded_bytes = int(
+                                task.total_bytes * task.progress / 100.0
+                            )
 
                         spd_m = _SPEED_RE.search(line)
                         if spd_m:

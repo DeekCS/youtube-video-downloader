@@ -103,6 +103,15 @@ function getCommonFormats(formats: Format[]): UserFriendlyFormat[] {
 export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: FormatsTableProps) {
   // Download progress state per format ID
   const [dlStates, setDlStates] = useState<Record<string, DownloadProgress & { downloading?: boolean }>>({})
+
+  /** Format bytes into a human-readable string. */
+  const fmtBytes = useCallback((bytes: number): string => {
+    if (bytes <= 0) return ''
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }, [])
   // Track SSE cleanup functions so we can close on unmount
   const cleanupFns = useRef<Record<string, () => void>>({})
 
@@ -137,7 +146,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
   const handleMergedDownload = async (formatId: string) => {
     setDlStates((s) => ({
       ...s,
-      [formatId]: { status: 'pending', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloading: true },
+      [formatId]: { status: 'pending', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, downloading: true },
     }))
 
     try {
@@ -179,7 +188,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
           // SSE connection error
           setDlStates((s) => ({
             ...s,
-            [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, error: 'Connection lost', downloading: true },
+            [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Connection lost', downloading: true },
           }))
           setTimeout(() => {
             setDlStates((s) => {
@@ -195,7 +204,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
     } catch {
       setDlStates((s) => ({
         ...s,
-        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, error: 'Failed to start', downloading: true },
+        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Failed to start', downloading: true },
       }))
       setTimeout(() => {
         setDlStates((s) => {
@@ -211,7 +220,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
   const handleDirectDownload = async (formatId: string, filename: string) => {
     setDlStates((s) => ({
       ...s,
-      [formatId]: { status: 'downloading', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloading: true },
+      [formatId]: { status: 'downloading', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, downloading: true },
     }))
 
     try {
@@ -226,7 +235,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
     } catch {
       setDlStates((s) => ({
         ...s,
-        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, error: 'Download failed', downloading: true },
+        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Download failed', downloading: true },
       }))
       setTimeout(() => {
         setDlStates((s) => {
@@ -287,8 +296,17 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
             {!isFailed && !isComplete && <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />}
             <span className="truncate">{label}</span>
           </span>
-          {state.speed && !isFailed && !isComplete && (
-            <span className="whitespace-nowrap">{state.speed}</span>
+          {!isFailed && !isComplete && (
+            <span className="whitespace-nowrap text-right">
+              {state.total_bytes > 0 && (
+                <span>{fmtBytes(state.downloaded_bytes)} / {fmtBytes(state.total_bytes)}</span>
+              )}
+              {state.total_bytes > 0 && state.speed ? ' · ' : ''}
+              {state.speed || ''}
+            </span>
+          )}
+          {isComplete && state.file_size > 0 && (
+            <span className="whitespace-nowrap">{fmtBytes(state.file_size)}</span>
           )}
         </div>
       </div>

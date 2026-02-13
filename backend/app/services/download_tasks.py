@@ -34,6 +34,8 @@ class DownloadTask:
     filename: str = ""
     content_type: str = "video/mp4"
     file_size: int = 0
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
     error: Optional[str] = None
     created_at: float = field(default_factory=time.time)
 

@@ -384,6 +384,8 @@ async def download_progress(download_id: str) -> EventSourceResponse:
                 "speed": t.speed,
                 "eta": t.eta,
                 "file_size": t.file_size,
+                "downloaded_bytes": t.downloaded_bytes,
+                "total_bytes": t.total_bytes,
             }
             if t.error:
                 data["error"] = t.error
