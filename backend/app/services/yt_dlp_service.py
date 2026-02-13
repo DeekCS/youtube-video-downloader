@@ -262,12 +262,16 @@ class YtDlpService:
             and MIME_VIDEO_PREFIX in f.mime_type
         }
 
-        # Best-available merged option
+        # Best-available merged option – stay within QuickTime-compatible
+        # codecs (H.264 video + AAC audio) only.  No bare "/best" fallback
+        # because it can pick VP9/Opus which QuickTime cannot play.
         merged_formats.append(Format(
             id=(
                 "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]"
-                "/bestvideo[vcodec^=avc1]+bestaudio"
-                "/bestvideo+bestaudio/best"
+                "/bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4]"
+                "/bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]"
+                "/best[vcodec^=avc1]"
+                "/best[vcodec^=avc]"
             ),
             quality_label="Best Available (Merged)",
             mime_type="video/mp4",
@@ -276,16 +280,20 @@ class YtDlpService:
             is_video_only=False,
         ))
 
-        # Resolution-specific merged formats
+        # Resolution-specific merged formats – restrict to H.264 + AAC.
+        # No bare "/best[height<=N]" fallback (could yield VP9).
         for height, label, _fmt_id in MERGE_TIERS:
             if height in available_heights:
                 merged_formats.append(Format(
                     id=(
                         f"bestvideo[height<={height}][vcodec^=avc1]"
                         f"+bestaudio[acodec^=mp4a]"
-                        f"/bestvideo[height<={height}][vcodec^=avc1]+bestaudio"
-                        f"/bestvideo[height<={height}]+bestaudio"
-                        f"/best[height<={height}]/best"
+                        f"/bestvideo[height<={height}][vcodec^=avc1]"
+                        f"+bestaudio[acodec^=mp4]"
+                        f"/bestvideo[height<={height}][vcodec^=avc]"
+                        f"+bestaudio[acodec^=mp4a]"
+                        f"/best[height<={height}][vcodec^=avc1]"
+                        f"/best[height<={height}][vcodec^=avc]"
                     ),
                     quality_label=f"{label} (Merged)",
                     mime_type="video/mp4",
@@ -542,7 +550,7 @@ class YtDlpService:
         format_spec = format_id
         is_merged_format = (
             "+" in format_id
-            or format_id in ("best", "bestvideo", "bestaudio")
+            or format_id in ("best", "bestvideo")
             or format_id.startswith("bestvideo[")
             or format_id.startswith("best[")
         )
@@ -573,8 +581,9 @@ class YtDlpService:
         if settings.YTDLP_USER_AGENT:
             cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
 
-        # Prefer free formats
-        if settings.YTDLP_PREFER_FREE_FORMATS:
+        # Prefer free formats – but NOT for merged downloads, where we
+        # need H.264+AAC and this flag biases yt-dlp toward webm/VP9.
+        if settings.YTDLP_PREFER_FREE_FORMATS and not is_merged_format:
             cmd.append("--prefer-free-formats")
 
         if settings.YTDLP_HTTP_CHUNK_SIZE:
@@ -584,12 +593,19 @@ class YtDlpService:
         if settings.YTDLP_SPONSORBLOCK_REMOVE:
             cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
 
-        # Merged format: merge into MP4 with QuickTime-compatible atom layout
+        # Merged format: merge into MP4 with QuickTime-compatible settings
         if is_merged_format:
             cmd.extend(["--merge-output-format", "mp4"])
-            # Format selectors already prefer H.264 + AAC codecs.
-            # Move moov atom to front for QuickTime compatibility.
-            cmd.extend(["--ppa", "Merger+:-movflags +faststart"])
+            # Force audio to AAC (safety net if an Opus/Vorbis stream
+            # slipped through the format selector fallback chain).
+            # Use fragmented MP4 (frag_keyframe+empty_moov) so the
+            # moov atom is written upfront – required for piped stdout
+            # output where seeking is impossible (faststart won't work).
+            cmd.extend([
+                "--ppa",
+                "Merger+:-c:v copy -c:a aac -b:a 192k "
+                "-movflags frag_keyframe+empty_moov+default_base_moof",
+            ])
 
         # Browser cookies (can bypass throttling)
         if settings.YTDLP_COOKIES_FROM_BROWSER:

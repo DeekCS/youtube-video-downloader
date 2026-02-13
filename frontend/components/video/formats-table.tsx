@@ -75,10 +75,11 @@ function getCommonFormats(formats: Format[]): UserFriendlyFormat[] {
       return bSize - aSize
     })[0]
 
+    const isWebm = bestAudio.mime_type.includes('webm')
     formatted.push({
       ...bestAudio,
       friendlyLabel: 'Audio Only (Best Quality)',
-      friendlyType: '🎵 Audio (M4A/WebM)',
+      friendlyType: isWebm ? '🎵 Audio (WebM) ⚠️' : '🎵 Audio (M4A)',
       priority: 100
     })
   }
@@ -236,6 +237,11 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
         {commonFormats.some(f => f.friendlyType.includes('Video + Audio')) ? (
           <p className="text-xs text-muted-foreground px-2">
             ✨ Merged formats automatically combine the best video and audio streams into a single MP4 file using ffmpeg.
+          </p>
+        ) : null}
+        {commonFormats.some(f => f.friendlyType.includes('⚠️')) ? (
+          <p className="text-xs text-muted-foreground px-2">
+            ⚠️ WebM formats may not play in QuickTime Player or Apple apps. Use VLC or convert to M4A/MP4 for best compatibility.
           </p>
         ) : null}
       </div>

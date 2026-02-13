@@ -215,10 +215,9 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
     # Build filename - keep original title for proper encoding
     is_merged_format = (
         "+" in request.format_id
-        or request.format_id in {"best", "bestvideo", "bestaudio"}
+        or request.format_id in {"best", "bestvideo"}
         or request.format_id.startswith("best[")
         or request.format_id.startswith("bestvideo[")
-        or request.format_id.startswith("merged-")
     )
     if is_merged_format:
         ext = "mp4"
