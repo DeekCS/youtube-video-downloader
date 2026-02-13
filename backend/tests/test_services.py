@@ -76,7 +76,13 @@ class TestFetchFormats:
         assert result.title == "Test Video"
         assert result.thumbnail_url == "https://example.com/thumb.jpg"
         assert result.duration_seconds == 180
-        assert len(result.formats) == 2
+
+        # Merged formats are prepended (Best Available + 720p tier = 2 merged)
+        # plus 2 original formats = 4 total
+        merged_fmts = [f for f in result.formats if "merged" in f.quality_label.lower() or "best available" in f.quality_label.lower()]
+        assert len(merged_fmts) >= 1  # At least Best Available merged
+        raw_fmts = [f for f in result.formats if f.id in ("22", "140")]
+        assert len(raw_fmts) == 2
 
         # Check video format
         video_fmt = next(f for f in result.formats if f.id == "22")
