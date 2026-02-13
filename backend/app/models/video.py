@@ -38,7 +38,7 @@ class DownloadRequest(BaseModel):
         ...,
         description="Format ID from the formats list (e.g., '22', '140', 'bestvideo[height<=1080]+bestaudio/best')",
         min_length=1,
-        max_length=200,
+        max_length=500,
         examples=["22", "140", "best", "bestvideo[height<=1080]+bestaudio/best"],
     )
 

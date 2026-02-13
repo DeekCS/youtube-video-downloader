@@ -38,7 +38,7 @@ export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row gap-2">
           <Input
             type="text"
             placeholder="https://www.youtube.com/watch?v=..."
@@ -51,7 +51,7 @@ export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
             className="flex-1"
             aria-label="Video URL"
           />
-          <Button type="submit" disabled={isLoading || !url.trim()} className="min-w-[140px]">
+          <Button type="submit" disabled={isLoading || !url.trim()} className="w-full sm:w-auto sm:min-w-[140px]">
             {isLoading ? (
               <>
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />

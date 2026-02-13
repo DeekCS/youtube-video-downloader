@@ -6,32 +6,32 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 export default function Home() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-background to-muted/20">
-      <div className="container max-w-5xl mx-auto py-12 px-4">
+      <div className="container max-w-5xl mx-auto py-6 sm:py-12 px-4">
         {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold tracking-tight mb-2">Video Downloader</h1>
-          <p className="text-muted-foreground">
+        <div className="text-center mb-6 sm:mb-12">
+          <h1 className="text-2xl sm:text-4xl font-bold tracking-tight mb-1 sm:mb-2">Video Downloader</h1>
+          <p className="text-sm sm:text-base text-muted-foreground">
             Download videos from YouTube and other platforms
           </p>
         </div>
 
         {/* Main Card */}
         <Card className="shadow-lg">
-          <CardHeader>
-            <CardTitle>Download Video</CardTitle>
-            <CardDescription>
+          <CardHeader className="px-4 sm:px-6 py-4 sm:py-6">
+            <CardTitle className="text-lg sm:text-xl">Download Video</CardTitle>
+            <CardDescription className="text-xs sm:text-sm">
               Enter a video URL to see available formats and download options
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-4 sm:px-6 pb-4 sm:pb-6">
             <Downloader />
           </CardContent>
         </Card>
 
         {/* Legal Notice */}
-        <Alert className="mt-8">
+        <Alert className="mt-6 sm:mt-8">
           <AlertTriangle className="h-4 w-4" />
-          <AlertDescription className="text-sm">
+          <AlertDescription className="text-xs sm:text-sm">
             <strong>Legal Notice:</strong> Only download content you own or have explicit rights to
             download. Users are responsible for complying with applicable copyright laws, terms of
             service, and platform policies. Misuse may violate laws in your jurisdiction.
@@ -39,7 +39,7 @@ export default function Home() {
         </Alert>
 
         {/* Footer */}
-        <footer className="text-center mt-12 text-sm text-muted-foreground">
+        <footer className="text-center mt-8 sm:mt-12 text-xs sm:text-sm text-muted-foreground">
           <p>
             Built with{' '}
             <a

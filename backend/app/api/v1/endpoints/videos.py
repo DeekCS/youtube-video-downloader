@@ -252,7 +252,7 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
 )
 async def download_video_get(
     url: str = Query(..., description="Video URL", min_length=10, max_length=2048),
-    format_id: str = Query(..., description="Format ID from formats list", min_length=1, max_length=200),
+    format_id: str = Query(..., description="Format ID from formats list", min_length=1, max_length=500),
 ) -> StreamingResponse:
     """Download a video via GET request (for browser navigation).
 

@@ -127,14 +127,19 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
   if (isLoading) {
     return (
       <div className="space-y-4">
-        <div className="flex gap-4">
-          <Skeleton className="h-32 w-48 rounded-lg" />
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+          <Skeleton className="h-40 sm:h-32 w-full sm:w-48 rounded-lg" />
           <div className="space-y-2 flex-1">
             <Skeleton className="h-6 w-3/4" />
             <Skeleton className="h-4 w-1/4" />
           </div>
         </div>
-        <Skeleton className="h-64 w-full" />
+        <div className="flex flex-col gap-3 sm:hidden">
+          <Skeleton className="h-28 w-full rounded-lg" />
+          <Skeleton className="h-28 w-full rounded-lg" />
+          <Skeleton className="h-28 w-full rounded-lg" />
+        </div>
+        <Skeleton className="hidden sm:block h-64 w-full" />
       </div>
     )
   }
@@ -144,11 +149,11 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* Video metadata */}
-      <div className="flex gap-4 items-start">
+      <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 items-center sm:items-start">
         {videoInfo.thumbnail_url && (
-          <div className="relative h-32 w-48 flex-shrink-0 rounded-lg overflow-hidden bg-muted">
+          <div className="relative h-40 w-full sm:h-32 sm:w-48 flex-shrink-0 rounded-lg overflow-hidden bg-muted">
             <Image
               src={videoInfo.thumbnail_url}
               alt={videoInfo.title}
@@ -158,82 +163,131 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
             />
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <h2 className="text-xl font-semibold mb-2 break-words">{videoInfo.title}</h2>
+        <div className="flex-1 min-w-0 text-center sm:text-left w-full">
+          <h2 className="text-lg sm:text-xl font-semibold mb-1 sm:mb-2 break-words">{videoInfo.title}</h2>
           {videoInfo.duration_seconds && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs sm:text-sm text-muted-foreground">
               Duration: {formatDuration(videoInfo.duration_seconds)}
             </p>
           )}
         </div>
       </div>
 
-      {/* Formats table */}
+      {/* Formats — card list on mobile, table on desktop */}
       <div className="space-y-2">
-        <div className="border rounded-lg">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Format</TableHead>
-                <TableHead>Details</TableHead>
-                <TableHead>Size</TableHead>
-                <TableHead className="text-right">Download</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {commonFormats.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
-                    No common formats available. Please try a different video.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                commonFormats.map((format) => {
-                  const isDownloading = downloadingIds.has(format.id)
+        {commonFormats.length === 0 ? (
+          <div className="text-center text-muted-foreground py-8 border rounded-lg">
+            No common formats available. Please try a different video.
+          </div>
+        ) : (
+          <>
+            {/* Mobile: card layout */}
+            <div className="flex flex-col gap-3 sm:hidden">
+              {commonFormats.map((format) => {
+                const isDownloading = downloadingIds.has(format.id)
+                return (
+                  <div
+                    key={format.id}
+                    className="border rounded-lg p-4 flex flex-col gap-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm leading-snug">{format.friendlyLabel}</p>
+                        <p className="text-xs text-muted-foreground mt-1">{format.friendlyType}</p>
+                      </div>
+                      {format.filesize_bytes && (
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">
+                          {formatFileSize(format.filesize_bytes)}
+                        </span>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => {
+                        const ext = format.is_audio_only ? 'm4a' : 'mp4'
+                        const filename = `${videoInfo?.title}.${ext}`
+                        handleDownload(format.id, filename)
+                      }}
+                      disabled={isDownloading}
+                    >
+                      {isDownloading ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                          Starting...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-4 w-4 mr-1" />
+                          Download
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
 
-                  return (
-                    <TableRow key={format.id}>
-                      <TableCell className="font-medium">{format.friendlyLabel}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <span className="text-sm">{format.friendlyType}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {format.quality_label}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{formatFileSize(format.filesize_bytes)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            const ext = format.is_audio_only ? 'm4a' : 'mp4'
-                            const filename = `${videoInfo?.title}.${ext}`
-                            handleDownload(format.id, filename)
-                          }}
-                          disabled={isDownloading}
-                        >
-                          {isDownloading ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                              Starting...
-                            </>
-                          ) : (
-                            <>
-                              <Download className="h-4 w-4" />
-                              Download
-                            </>
-                          )}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+            {/* Desktop: table layout */}
+            <div className="hidden sm:block border rounded-lg">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Format</TableHead>
+                    <TableHead>Details</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead className="text-right">Download</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {commonFormats.map((format) => {
+                    const isDownloading = downloadingIds.has(format.id)
+
+                    return (
+                      <TableRow key={format.id}>
+                        <TableCell className="font-medium">{format.friendlyLabel}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <span className="text-sm">{format.friendlyType}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {format.quality_label}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{formatFileSize(format.filesize_bytes)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const ext = format.is_audio_only ? 'm4a' : 'mp4'
+                              const filename = `${videoInfo?.title}.${ext}`
+                              handleDownload(format.id, filename)
+                            }}
+                            disabled={isDownloading}
+                          >
+                            {isDownloading ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                                Starting...
+                              </>
+                            ) : (
+                              <>
+                                <Download className="h-4 w-4" />
+                                Download
+                              </>
+                            )}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
         {commonFormats.some(f => f.friendlyType.includes('Video + Audio')) ? (
           <p className="text-xs text-muted-foreground px-2">
             ✨ Merged formats automatically combine the best video and audio streams into a single MP4 file using ffmpeg.
