@@ -109,31 +109,12 @@ class TestFetchFormats:
 
 
 class TestBuildDownloadCommand:
-    """Tests for download command construction."""
+    """Tests for download command construction (single-stream only)."""
 
     _URL = "https://www.youtube.com/watch?v=test"
 
-    def test_merged_format_has_merge_flags(self) -> None:
-        """Merged format IDs must produce --merge-output-format mp4 and --ppa flags."""
-        merged_ids = [
-            "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]",
-            "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]",
-            "bestvideo[height<=1080][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
-            "/best[height<=1080][vcodec^=avc1]",
-        ]
-        for fmt_id in merged_ids:
-            cmd = YtDlpService.build_download_command(self._URL, fmt_id)
-            assert "--merge-output-format" in cmd, f"Missing --merge-output-format for {fmt_id}"
-            assert "mp4" in cmd, f"Missing mp4 merge target for {fmt_id}"
-            assert "--ppa" in cmd, f"Missing --ppa for {fmt_id}"
-            ppa_idx = cmd.index("--ppa")
-            ppa_val = cmd[ppa_idx + 1]
-            assert "-c:a aac" in ppa_val, f"Missing AAC audio transcode for {fmt_id}"
-            assert "frag_keyframe" in ppa_val, f"Missing fragmented MP4 flags for {fmt_id}"
-            assert "empty_moov" in ppa_val, f"Missing empty_moov flag for {fmt_id}"
-
-    def test_non_merged_format_no_merge_flags(self) -> None:
-        """Regular single-stream format IDs must NOT get merge flags."""
+    def test_single_stream_no_merge_flags(self) -> None:
+        """Single-stream format IDs must NOT get merge flags."""
         single_ids = ["22", "140", "251", "bestaudio"]
         for fmt_id in single_ids:
             cmd = YtDlpService.build_download_command(self._URL, fmt_id)
@@ -144,20 +125,6 @@ class TestBuildDownloadCommand:
                 f"Unexpected --ppa for single stream {fmt_id}"
             )
 
-    def test_prefer_free_formats_skipped_for_merged(self) -> None:
-        """--prefer-free-formats must NOT appear for merged format downloads."""
-        fmt_id = "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]"
-        cmd = YtDlpService.build_download_command(self._URL, fmt_id)
-        assert "--prefer-free-formats" not in cmd
-
-    def test_prefer_free_formats_kept_for_single(self) -> None:
-        """--prefer-free-formats appears for single-stream downloads (when enabled)."""
-        cmd = YtDlpService.build_download_command(self._URL, "22")
-        # The setting defaults to True, so the flag should be present
-        if "--prefer-free-formats" in cmd:
-            assert True  # Confirms preference is applied for singles
-        # If somehow disabled in test env, that's also acceptable
-
     def test_stdout_output(self) -> None:
         """Command must write to stdout (-o -)."""
         cmd = YtDlpService.build_download_command(self._URL, "22")
@@ -167,7 +134,7 @@ class TestBuildDownloadCommand:
 
     def test_format_spec_passed(self) -> None:
         """The format ID must be passed as the -f argument."""
-        fmt_id = "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]"
+        fmt_id = "22"
         cmd = YtDlpService.build_download_command(self._URL, fmt_id)
         f_idx = cmd.index("-f")
         assert cmd[f_idx + 1] == fmt_id

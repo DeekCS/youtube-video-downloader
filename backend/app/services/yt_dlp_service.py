@@ -2,9 +2,13 @@
 
 import hashlib
 import ipaddress
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
+import uuid
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -497,6 +501,111 @@ class YtDlpService:
             raise  # pragma: no cover
 
     @classmethod
+    def download_merged_to_file(
+        cls,
+        url: str,
+        format_id: str,
+    ) -> tuple[str, str]:
+        """Download merged format to a temp file.
+
+        When merging two streams (video+audio), yt-dlp/ffmpeg cannot pipe
+        proper MP4 to stdout — it falls back to MPEG-TS.  Instead we
+        download to a temp file where ffmpeg can seek and produce a real
+        MP4 with ``+faststart`` (moov atom at the front).
+
+        Args:
+            url: Video URL
+            format_id: Merged format selector string
+
+        Returns:
+            Tuple of (output_file_path, temp_dir_path).  The caller MUST
+            clean up *temp_dir_path* after streaming.
+
+        Raises:
+            InvalidUrlError: If URL or format_id is invalid
+            YtdlpFailedError: If download or merge fails
+        """
+        if not FORMAT_ID_PATTERN.match(format_id):
+            raise InvalidUrlError("Invalid format_id")
+
+        normalized_url = cls.normalize_url(url)
+        safe_url = cls._sanitize_url_for_logging(normalized_url)
+
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_")
+        dl_id = uuid.uuid4().hex[:12]
+        output_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
+
+        cmd: list[str] = [
+            "yt-dlp",
+            "-f", format_id,
+            "-o", output_template,
+            "--merge-output-format", "mp4",
+            # yt-dlp already adds  -c copy -movflags +faststart  when
+            # merging to a file, so no --ppa needed.
+            "--no-part",
+            "--no-warnings",
+            "--quiet",
+            "--no-playlist",
+            "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
+            "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
+            "--buffer-size", settings.YTDLP_BUFFER_SIZE,
+            "--socket-timeout", str(settings.YTDLP_SOCKET_TIMEOUT),
+            "--retries", str(settings.YTDLP_RETRIES),
+            "--fragment-retries", str(settings.YTDLP_FRAGMENT_RETRIES),
+            "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
+            "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
+        ]
+
+        if settings.YTDLP_SLEEP_REQUESTS > 0:
+            cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
+        if settings.YTDLP_USER_AGENT:
+            cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
+        if settings.YTDLP_HTTP_CHUNK_SIZE:
+            cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
+        if settings.YTDLP_SPONSORBLOCK_REMOVE:
+            cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
+        if settings.YTDLP_COOKIES_FROM_BROWSER:
+            cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
+        if settings.YTDLP_PROXY:
+            cmd.extend(["--proxy", settings.YTDLP_PROXY])
+
+        cmd.append(normalized_url)
+
+        logger.info(
+            f"Starting merged file download for format {format_id} from {safe_url}"
+        )
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, timeout=3600,
+            )
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise YtdlpFailedError("Download timed out (1-hour limit)")
+
+        if result.returncode != 0:
+            stderr_text = result.stderr.decode(errors="replace")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.error(
+                f"Merged download failed ({result.returncode}) "
+                f"for {safe_url}: {stderr_text[:500]}"
+            )
+            raise YtdlpFailedError(f"Download failed: {stderr_text[:200]}")
+
+        # Find the output file (extension may vary)
+        files = [f for f in os.listdir(temp_dir) if not f.startswith(".")]
+        if not files:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise YtdlpFailedError("Download produced no output file")
+
+        actual_path = os.path.join(temp_dir, files[0])
+        file_size = os.path.getsize(actual_path)
+        logger.info(
+            f"Merged download complete: {file_size:,} bytes for {safe_url}"
+        )
+        return actual_path, temp_dir
+
+    @classmethod
     def download_format(
         cls,
         url: str,
@@ -544,16 +653,14 @@ class YtDlpService:
     def build_download_command(
         cls, url: str, format_id: str, progress: bool = False,
     ) -> list[str]:
-        """Build a yt-dlp command that streams the selected format to stdout."""
+        """Build a yt-dlp command that streams a single format to stdout.
+
+        For merged formats (video+audio), use ``download_merged_to_file``
+        instead — piping merged output to stdout produces MPEG-TS, not MP4.
+        """
         normalized_url = cls.normalize_url(url)
 
         format_spec = format_id
-        is_merged_format = (
-            "+" in format_id
-            or format_id in ("best", "bestvideo")
-            or format_id.startswith("bestvideo[")
-            or format_id.startswith("best[")
-        )
 
         cmd: list[str] = [
             "yt-dlp",
@@ -581,9 +688,8 @@ class YtDlpService:
         if settings.YTDLP_USER_AGENT:
             cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
 
-        # Prefer free formats – but NOT for merged downloads, where we
-        # need H.264+AAC and this flag biases yt-dlp toward webm/VP9.
-        if settings.YTDLP_PREFER_FREE_FORMATS and not is_merged_format:
+        # Prefer free formats for single-stream downloads
+        if settings.YTDLP_PREFER_FREE_FORMATS:
             cmd.append("--prefer-free-formats")
 
         if settings.YTDLP_HTTP_CHUNK_SIZE:
@@ -592,20 +698,6 @@ class YtDlpService:
         # SponsorBlock: skip sponsor segments to reduce download time
         if settings.YTDLP_SPONSORBLOCK_REMOVE:
             cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
-
-        # Merged format: merge into MP4 with QuickTime-compatible settings
-        if is_merged_format:
-            cmd.extend(["--merge-output-format", "mp4"])
-            # Force audio to AAC (safety net if an Opus/Vorbis stream
-            # slipped through the format selector fallback chain).
-            # Use fragmented MP4 (frag_keyframe+empty_moov) so the
-            # moov atom is written upfront – required for piped stdout
-            # output where seeking is impossible (faststart won't work).
-            cmd.extend([
-                "--ppa",
-                "Merger+:-c:v copy -c:a aac -b:a 192k "
-                "-movflags frag_keyframe+empty_moov+default_base_moof",
-            ])
 
         # Browser cookies (can bypass throttling)
         if settings.YTDLP_COOKIES_FROM_BROWSER:

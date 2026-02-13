@@ -1,6 +1,8 @@
 """Video-related API endpoints."""
 import asyncio
+import os
 import re
+import shutil
 import threading
 from typing import Any, AsyncIterator
 from urllib.parse import quote
@@ -96,6 +98,35 @@ def _build_content_disposition(filename: str) -> str:
     # Return header with both formats for maximum compatibility
     # filename= for older browsers, filename*= for modern browsers
     return f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
+
+
+async def _stream_file(
+    file_path: str,
+    temp_dir: str,
+) -> AsyncIterator[bytes]:
+    """Stream a temp file to the client, then clean up.
+
+    Args:
+        file_path: Path to the downloaded file
+        temp_dir: Temp directory to remove after streaming
+
+    Yields:
+        Chunks of file data
+    """
+    chunk_size = settings.YTDLP_STREAM_CHUNK_SIZE
+    try:
+        def _read_chunks() -> bytes:
+            with open(file_path, "rb") as f:
+                return f.read(chunk_size)
+
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = await asyncio.to_thread(f.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 async def _stream_download(
@@ -229,6 +260,28 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
 
     logger.info(f"Streaming download: {filename} ({request.format_id})")
 
+    if is_merged_format:
+        # Merged formats: download to temp file first, then stream.
+        # yt-dlp/ffmpeg can't pipe proper MP4 to stdout (falls back to
+        # MPEG-TS).  Temp-file lets ffmpeg write real MP4 with faststart.
+        file_path, temp_dir = await asyncio.to_thread(
+            YtDlpService.download_merged_to_file,
+            request.url,
+            request.format_id,
+        )
+        file_size = os.path.getsize(file_path)
+
+        return StreamingResponse(
+            _stream_file(file_path, temp_dir),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": _build_content_disposition(filename),
+                "Content-Length": str(file_size),
+                "X-Format-ID": request.format_id,
+            },
+        )
+
+    # Single-stream formats: pipe directly from yt-dlp stdout.
     return StreamingResponse(
         _stream_download(request.url, request.format_id, filename),
         media_type=content_type,
