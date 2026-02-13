@@ -333,8 +333,10 @@ class YtDlpService:
                 ]
 
                 # Always add a "Best Quality" merged option
+                # Prefer H.264 (avc1) + AAC (mp4a) codecs for maximum player compatibility
+                # (QuickTime, iOS, older browsers). Falls back to any codec combination.
                 merged_formats.append(Format(
-                    id="bestvideo+bestaudio/best",
+                    id="bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[vcodec^=avc1]+bestaudio/bestvideo+bestaudio/best",
                     quality_label="Best Available (Merged)",
                     mime_type="video/mp4",
                     filesize_bytes=None,
@@ -344,8 +346,14 @@ class YtDlpService:
 
                 for height, label, fmt_id in merge_tiers:
                     if height in available_heights:
+                        # Prefer H.264+AAC at each resolution for QuickTime/iOS compat
                         merged_formats.append(Format(
-                            id=f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
+                            id=(
+                                f"bestvideo[height<={height}][vcodec^=avc1]+bestaudio[acodec^=mp4a]"
+                                f"/bestvideo[height<={height}][vcodec^=avc1]+bestaudio"
+                                f"/bestvideo[height<={height}]+bestaudio"
+                                f"/best[height<={height}]/best"
+                            ),
                             quality_label=f"{label} (Merged)",
                             mime_type="video/mp4",
                             filesize_bytes=None,
@@ -506,6 +514,14 @@ class YtDlpService:
         # If this is a merged format (video+audio), tell yt-dlp to merge into MP4
         if is_merged_format:
             cmd.extend(["--merge-output-format", "mp4"])
+            # The format selectors already prefer H.264 (avc1) + AAC (mp4a) codecs
+            # for maximum player compatibility (QuickTime, iOS, older browsers).
+            # Use -c copy to avoid slow re-encoding (codecs are already correct).
+            # Use -movflags +faststart to put moov atom at beginning for QuickTime.
+            cmd.extend([
+                "--ppa",
+                "Merger+:-movflags +faststart",
+            ])
 
         # Advanced YouTube extractor arguments for better anti-throttling
         # Note: iOS client can cause "format not available" errors for some videos
