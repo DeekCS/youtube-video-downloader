@@ -14,10 +14,6 @@ environment:
   # Large streaming buffer (2MB chunks)
   - YTDLP_STREAM_CHUNK_SIZE=2097152
 
-  # Multi-connection downloader
-  - YTDLP_USE_ARIA2C=true
-  - YTDLP_ARIA2C_MAX_CONNECTIONS=16
-
   # Large internal buffer
   - YTDLP_BUFFER_SIZE=1M
 
@@ -58,16 +54,6 @@ YTDLP_CONCURRENT_FRAGMENTS=32  # Default: 8, Range: 1-32
 - Higher = faster for fragmented formats (most YouTube videos)
 - Too high can trigger throttling or overload network
 - **Recommended**: 16-32 for good internet, 8-16 for slower
-
-### aria2c External Downloader
-```yaml
-YTDLP_USE_ARIA2C=true
-YTDLP_ARIA2C_MAX_CONNECTIONS=16  # Range: 1-32
-```
-- Uses multi-connection download (like IDM)
-- **Best for**: Non-fragmented formats, large single files
-- **Not effective for**: Already-fragmented DASH/HLS streams
-- **Tip**: Try disabling if speed doesn't improve
 
 ### HTTP Chunk Size
 ```yaml
@@ -150,8 +136,6 @@ YTDLP_SPONSORBLOCK_REMOVE=sponsor,intro,outro
 ### For YouTube (Most Users)
 ```yaml
 - YTDLP_CONCURRENT_FRAGMENTS=32
-- YTDLP_USE_ARIA2C=true
-- YTDLP_ARIA2C_MAX_CONNECTIONS=16
 - YTDLP_HTTP_CHUNK_SIZE=
 - YTDLP_THROTTLED_RATE=50K
 - YTDLP_USE_IOS_CLIENT=true
@@ -161,8 +145,6 @@ YTDLP_SPONSORBLOCK_REMOVE=sponsor,intro,outro
 ### For Other Platforms (Vimeo, Dailymotion, etc.)
 ```yaml
 - YTDLP_CONCURRENT_FRAGMENTS=16
-- YTDLP_USE_ARIA2C=true
-- YTDLP_ARIA2C_MAX_CONNECTIONS=16
 - YTDLP_HTTP_CHUNK_SIZE=10M
 - YTDLP_USE_IOS_CLIENT=false
 ```
@@ -170,7 +152,6 @@ YTDLP_SPONSORBLOCK_REMOVE=sponsor,intro,outro
 ### For Slow/Throttled Connections
 ```yaml
 - YTDLP_CONCURRENT_FRAGMENTS=8
-- YTDLP_USE_ARIA2C=false
 - YTDLP_HTTP_CHUNK_SIZE=
 - YTDLP_THROTTLED_RATE=20K
 - YTDLP_SLEEP_REQUESTS=1  # Wait 1s between requests
@@ -229,10 +210,9 @@ In the UI, try downloading:
 
 If audio is fast but video is slow → platform throttling video streams
 
-### Verify aria2c Active
+### Verify Settings Active
 ```bash
-docker exec youtube-video-downloader-backend-1 which aria2c
-# Should output: /usr/bin/aria2c
+docker exec youtube-video-downloader-backend-1 env | grep YTDLP
 ```
 
 ## Advanced: Manual Testing
@@ -259,8 +239,6 @@ All env vars available:
 | `YTDLP_SOCKET_TIMEOUT` | 30 | Socket timeout (seconds) |
 | `YTDLP_STREAM_CHUNK_SIZE` | 524288 | Response stream chunks |
 | `YTDLP_THROTTLED_RATE` | 100K | Auto-bypass threshold |
-| `YTDLP_USE_ARIA2C` | false | Enable aria2c downloader |
-| `YTDLP_ARIA2C_MAX_CONNECTIONS` | 16 | aria2c connections |
 | `YTDLP_USE_IOS_CLIENT` | false | iOS client impersonation |
 | `YTDLP_COOKIES_FROM_BROWSER` | - | Browser for cookies |
 | `YTDLP_USER_AGENT` | - | Custom user agent |
@@ -283,4 +261,4 @@ docker compose up --build -d backend
 ---
 
 **Last Updated**: February 11, 2026
-**Tested With**: yt-dlp 2026.2.4, aria2 1.37+
+**Tested With**: yt-dlp 2026.2.4

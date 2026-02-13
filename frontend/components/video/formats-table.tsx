@@ -33,57 +33,35 @@ interface UserFriendlyFormat extends Format {
 function getCommonFormats(formats: Format[]): UserFriendlyFormat[] {
   const formatted: UserFriendlyFormat[] = []
 
-  // Separate merged formats (special yt-dlp selectors) from regular formats
+  // Separate merged formats (yt-dlp auto-merge selectors) from regular formats
   const mergedFormats = formats.filter(f =>
+    f.id.includes('+') ||
     f.quality_label.toLowerCase().includes('merged') ||
-    !f.is_audio_only && !f.is_video_only
+    f.id.startsWith('bestvideo') ||
+    f.id === 'best'
   )
   const videoOnly = formats.filter(f => f.is_video_only)
   const audioOnly = formats.filter(f => f.is_audio_only)
 
   let priority = 1
 
-  // First, add merged formats (these have audio included)
-  const mergedResolutions = [
-    { pattern: 'best available', label: 'Best Quality (Auto-merged)', match: (l: string) => l.toLowerCase().includes('best available') },
-    { pattern: '1080', label: 'Full HD (1080p)', match: (l: string) => l.includes('1080') },
-    { pattern: '720', label: 'HD (720p)', match: (l: string) => l.includes('720') },
+  // Merged quality tiers (these download video+audio and merge via ffmpeg)
+  const mergedTiers = [
+    { pattern: 'best available', label: 'Best Quality (Video + Audio)', match: (f: Format) => f.quality_label.toLowerCase().includes('best available') },
+    { pattern: '2160', label: '4K Ultra HD (2160p) — Video + Audio', match: (f: Format) => f.quality_label.includes('2160') },
+    { pattern: '1440', label: 'QHD (1440p) — Video + Audio', match: (f: Format) => f.quality_label.includes('1440') },
+    { pattern: '1080', label: 'Full HD (1080p) — Video + Audio', match: (f: Format) => f.quality_label.includes('1080') },
+    { pattern: '720', label: 'HD (720p) — Video + Audio', match: (f: Format) => f.quality_label.includes('720') },
+    { pattern: '480', label: 'SD (480p) — Video + Audio', match: (f: Format) => f.quality_label.includes('480') },
   ]
 
-  mergedResolutions.forEach(({ label, match }) => {
-    const format = mergedFormats.find(f => match(f.quality_label))
+  mergedTiers.forEach(({ label, match }) => {
+    const format = mergedFormats.find(f => match(f))
     if (format) {
       formatted.push({
         ...format,
         friendlyLabel: label,
-        friendlyType: 'Video + Audio (Merged)',
-        priority: priority++
-      })
-    }
-  })
-
-  // Then add video-only formats if needed
-  const videoResolutions = [
-    { res: '2160', label: '4K (2160p)' },
-    { res: '1440', label: '1440p QHD' },
-    { res: '1080', label: 'Full HD (1080p)' },
-    { res: '720', label: 'HD (720p)' },
-    { res: '480', label: 'SD (480p)' },
-    { res: '360', label: '360p' }
-  ]
-
-  videoResolutions.forEach(({ res, label }) => {
-    // Skip if we already have this resolution as merged
-    if (formatted.some(f => f.quality_label.includes(res))) {
-      return
-    }
-
-    const format = videoOnly.find(f => f.quality_label.includes(res))
-    if (format) {
-      formatted.push({
-        ...format,
-        friendlyLabel: label,
-        friendlyType: 'Video Only (No Audio)',
+        friendlyType: '🎬 Video + Audio (MP4)',
         priority: priority++
       })
     }
@@ -99,8 +77,8 @@ function getCommonFormats(formats: Format[]): UserFriendlyFormat[] {
 
     formatted.push({
       ...bestAudio,
-      friendlyLabel: 'Audio Only',
-      friendlyType: 'MP3/M4A',
+      friendlyLabel: 'Audio Only (Best Quality)',
+      friendlyType: '🎵 Audio (M4A/WebM)',
       priority: 100
     })
   }
@@ -255,13 +233,9 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
             </TableBody>
           </Table>
         </div>
-        {commonFormats.some(f => f.friendlyType.includes('Merged')) ? (
+        {commonFormats.some(f => f.friendlyType.includes('Video + Audio')) ? (
           <p className="text-xs text-muted-foreground px-2">
-            ✨ Merged formats automatically combine video and audio streams for you.
-          </p>
-        ) : commonFormats.some(f => f.is_video_only) ? (
-          <p className="text-xs text-muted-foreground px-2">
-            ℹ️ Some high-quality formats are video-only. Download audio separately and merge using video editing software if needed.
+            ✨ Merged formats automatically combine the best video and audio streams into a single MP4 file using ffmpeg.
           </p>
         ) : null}
       </div>

@@ -13,11 +13,11 @@ This guide walks you through deploying the Video Downloader monorepo to Railway 
 
 ## Overview
 
-You'll create two Railway services:
-1. **Backend** (FastAPI + yt-dlp)
-2. **Frontend** (Next.js 16)
+You'll create two Railway services from the same monorepo:
+1. **Backend** (FastAPI + yt-dlp) — Docker build from `backend/`
+2. **Frontend** (Next.js 16) — Docker build from `frontend/`
 
-Both services will be deployed from the same monorepo using Railway's root directory configuration.
+Railway auto-detects the `railway.toml` in each service's root directory and passes all environment variables as Docker build args.
 
 ---
 
@@ -37,49 +37,51 @@ Both services will be deployed from the same monorepo using Railway's root direc
 
 1. In your Railway project, click "+ New Service"
 2. Select your repository
-3. Name it "Backend" or "API"
+3. Name it `backend`
 
 ### 2.2 Configure Backend Build
 
 1. Go to the Backend service **Settings**
 2. Under **Build**, set:
    - **Root Directory**: `backend`
-   - **Builder**: Docker (will auto-detect the Dockerfile)
+   - **Builder**: Docker (auto-detected from `railway.toml`)
 
-> **Note**: Railway injects a `PORT` environment variable. The Dockerfile is already configured to use `${PORT:-8000}`, so no additional port configuration is needed.
+> **Note**: Railway injects a `PORT` environment variable at runtime. The Dockerfile uses `${PORT:-8000}`, so it works automatically.
 
-### 2.3 Configure Backend Environment Variables
+### 2.3 Configure Backend Domain
+
+1. Go to **Settings** → **Networking**
+2. Click "Generate Domain" to get a public URL
+3. Copy this URL — you'll need it for the frontend
+
+Example: `https://backend-production-abc123.up.railway.app`
+
+### 2.4 Configure Backend Environment Variables
 
 Go to the Backend service **Variables** tab and add:
 
 ```env
 ENV=production
 API_V1_PREFIX=/api/v1
-CORS_ORIGINS=https://your-frontend-url.up.railway.app
 LOG_LEVEL=INFO
 BLOCK_PRIVATE_NETWORKS=true
 ALLOWED_URL_SCHEMES=http,https
 ```
 
-> **Important**: Update `CORS_ORIGINS` after deploying the frontend (see Step 3).
-
-### 2.4 Configure Backend Domain
-
-1. Go to **Settings** → **Networking**
-2. Click "Generate Domain" to get a public URL
-3. Copy this URL (you'll need it for the frontend)
-
-Example: `https://backend-production-abc123.up.railway.app`
-
-### 2.5 Update CORS Origins
-
-Once you have the frontend domain (Step 3), update the backend's `CORS_ORIGINS`:
+**For CORS**, use Railway's variable reference to auto-discover the frontend domain:
 
 ```env
-CORS_ORIGINS=https://frontend-production-xyz789.up.railway.app
+CORS_ORIGINS=https://${{Frontend.RAILWAY_PUBLIC_DOMAIN}}
 ```
 
-### 2.6 Verify Backend Deployment
+> This automatically resolves to the frontend's Railway domain. Replace `Frontend` with whatever you named your frontend service.
+
+If you don't want to use variable references, set it manually after deploying the frontend:
+```env
+CORS_ORIGINS=https://your-frontend-url.up.railway.app
+```
+
+### 2.5 Verify Backend Deployment
 
 1. Wait for the build and deployment to complete
 2. Visit `https://your-backend-url.up.railway.app/health`
@@ -95,27 +97,30 @@ CORS_ORIGINS=https://frontend-production-xyz789.up.railway.app
 
 1. In your Railway project, click "+ New Service"
 2. Select your repository again
-3. Name it "Frontend" or "Web"
+3. Name it `frontend`
 
 ### 3.2 Configure Frontend Build
 
 1. Go to the Frontend service **Settings**
 2. Under **Build**, set:
    - **Root Directory**: `frontend`
-   - **Builder**: Nixpacks (Railway auto-detects Next.js)
-   - **Install Command**: `pnpm install` (auto-detected)
-   - **Build Command**: `pnpm build` (auto-detected)
-   - **Start Command**: `pnpm start` (auto-detected)
+   - **Builder**: Docker (auto-detected from `railway.toml`)
 
 ### 3.3 Configure Frontend Environment Variables
 
 Go to the Frontend service **Variables** tab and add:
 
+**Using Railway variable references** (recommended):
+```env
+NEXT_PUBLIC_API_BASE=https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1
+```
+
+> Replace `Backend` with whatever you named your backend service. This variable is passed as a Docker build arg and baked into the Next.js bundle at build time.
+
+**Or set manually:**
 ```env
 NEXT_PUBLIC_API_BASE=https://your-backend-url.up.railway.app/api/v1
 ```
-
-> Replace `your-backend-url` with the actual backend domain from Step 2.4.
 
 ### 3.4 Configure Frontend Domain
 
@@ -124,20 +129,28 @@ NEXT_PUBLIC_API_BASE=https://your-backend-url.up.railway.app/api/v1
 
 Example: `https://frontend-production-xyz789.up.railway.app`
 
-### 3.5 Update Backend CORS
-
-Now that you have the frontend URL, go back to the Backend service and update `CORS_ORIGINS` (see Step 2.5).
-
-### 3.6 Verify Frontend Deployment
+### 3.5 Verify Frontend Deployment
 
 1. Visit your frontend URL
 2. The Video Downloader UI should load
-3. Paste a YouTube URL and click "Fetch Formats"
+3. Paste a video URL and click "Fetch Formats"
 4. Verify that formats load successfully
 
 ---
 
-## Step 4: Final Verification
+## Step 4: Final Checklist
+
+| Service  | Variable | Value |
+|----------|----------|-------|
+| Backend  | `ENV` | `production` |
+| Backend  | `API_V1_PREFIX` | `/api/v1` |
+| Backend  | `CORS_ORIGINS` | `https://${{Frontend.RAILWAY_PUBLIC_DOMAIN}}` |
+| Backend  | `LOG_LEVEL` | `INFO` |
+| Backend  | `BLOCK_PRIVATE_NETWORKS` | `true` |
+| Backend  | `ALLOWED_URL_SCHEMES` | `http,https` |
+| Frontend | `NEXT_PUBLIC_API_BASE` | `https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1` |
+
+> **Important**: After setting `NEXT_PUBLIC_API_BASE`, you may need to trigger a **redeploy** of the frontend because this value is baked in at build time. Go to the frontend service → Deployments → Redeploy.
 
 ### Test End-to-End Flow
 
@@ -166,7 +179,10 @@ Now that you have the frontend URL, go back to the Backend service and update `C
 2. Click "Add Custom Domain"
 3. Enter your domain (e.g., `downloader.yourdomain.com`)
 4. Follow Railway's DNS configuration instructions
-5. Update Backend's `CORS_ORIGINS` to include the custom domain
+5. Update Backend's `CORS_ORIGINS` to include the custom domain:
+   ```env
+   CORS_ORIGINS=https://downloader.yourdomain.com
+   ```
 
 ### Add Custom Domain to Backend
 
@@ -174,7 +190,10 @@ Now that you have the frontend URL, go back to the Backend service and update `C
 2. Click "Add Custom Domain"
 3. Enter your API subdomain (e.g., `api.yourdomain.com`)
 4. Follow Railway's DNS configuration instructions
-5. Update Frontend's `NEXT_PUBLIC_API_BASE` to use the custom domain
+5. Update Frontend's `NEXT_PUBLIC_API_BASE` and **redeploy**:
+   ```env
+   NEXT_PUBLIC_API_BASE=https://api.yourdomain.com/api/v1
+   ```
 
 ---
 
@@ -182,52 +201,27 @@ Now that you have the frontend URL, go back to the Backend service and update `C
 
 ### Backend Issues
 
-**Problem**: `/health` endpoint returns 502 or timeout
-- **Solution**: Check Backend logs for startup errors; ensure Dockerfile builds successfully
-
-**Problem**: CORS errors in browser console
-- **Solution**: Verify `CORS_ORIGINS` in Backend matches the Frontend domain exactly (include `https://`)
-
-**Problem**: yt-dlp fails with "command not found"
-- **Solution**: Ensure the Backend Dockerfile installs `yt-dlp` correctly (it's included in the provided Dockerfile)
+| Problem | Solution |
+|---------|----------|
+| `/health` returns 502 or timeout | Check Backend logs for startup errors; ensure Dockerfile builds successfully |
+| CORS errors in browser console | Verify `CORS_ORIGINS` matches the Frontend domain exactly (include `https://`) |
+| yt-dlp fails with "command not found" | Ensure the Dockerfile installs yt-dlp correctly (it's included in the provided Dockerfile) |
+| Downloads timeout | Increase service memory in Settings → Resources; Railway default timeout is 5 min |
 
 ### Frontend Issues
 
-**Problem**: "Missing required environment variable: NEXT_PUBLIC_API_BASE"
-- **Solution**: Add `NEXT_PUBLIC_API_BASE` to Frontend service variables
+| Problem | Solution |
+|---------|----------|
+| API requests fail | Verify `NEXT_PUBLIC_API_BASE` points to the Backend URL with `/api/v1` suffix; **redeploy** after changing |
+| Build fails | Check logs — `NEXT_PUBLIC_API_BASE` must be set before build since it's baked into the JS bundle |
+| Page loads but shows errors | Open browser DevTools → Console; check for CORS or network errors |
 
-**Problem**: API requests fail with network error
-- **Solution**: Verify `NEXT_PUBLIC_API_BASE` points to the correct Backend URL (include `/api/v1` suffix)
+### Variable Reference Issues
 
-**Problem**: Build fails with Node.js version mismatch
-- **Solution**: Railway should auto-detect Node 20; ensure `package.json` has `"engines": {"node": ">=20.0.0"}`
-
-### Download Issues
-
-**Problem**: Downloads fail with 404
-- **Solution**: Check Backend logs; ensure the video URL is accessible and platform is supported
-
-**Problem**: Large downloads timeout
-- **Solution**: Railway's default timeout is 5 minutes; for longer downloads, consider implementing background jobs (see Roadmap in README)
-
----
-
-## Scaling
-
-### Increase Backend Resources
-
-1. Go to Backend service → **Settings** → **Resources**
-2. Increase memory/CPU if downloads are slow or timing out
-
-### Increase Uvicorn Workers
-
-The backend Dockerfile uses Railway's `PORT` env var automatically. To increase workers, edit the `CMD` line in `backend/Dockerfile`:
-
-```dockerfile
-CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"
-```
-
-Redeploy the Backend service.
+| Problem | Solution |
+|---------|----------|
+| `${{Backend.RAILWAY_PUBLIC_DOMAIN}}` is empty | Ensure the backend service is named exactly `Backend` (or update the reference to match your service name) |
+| Changes to `NEXT_PUBLIC_API_BASE` don't take effect | This variable is baked at build time — you must trigger a **redeploy** of the frontend service |
 
 ---
 
@@ -239,7 +233,8 @@ Redeploy the Backend service.
 # Install Railway CLI
 npm install -g @railway/cli
 
-# Link to your project
+# Login and link to your project
+railway login
 railway link
 
 # View backend logs
@@ -248,20 +243,6 @@ railway logs --service backend
 # View frontend logs
 railway logs --service frontend
 ```
-
-### Set Up Alerts (Optional)
-
-1. Go to Project → **Settings** → **Notifications**
-2. Add Slack/Discord webhook for deployment notifications
-
----
-
-## Next Steps
-
-- Add authentication (e.g., Clerk, Auth0)
-- Implement rate limiting (e.g., Redis + middleware)
-- Add background job processing (Celery + Redis, or Railway's new Queue service)
-- Set up monitoring (Sentry for errors, Prometheus + Grafana for metrics)
 
 ---
 
@@ -272,4 +253,4 @@ railway logs --service frontend
 - Next.js Docs: https://nextjs.org/docs
 - yt-dlp Docs: https://github.com/yt-dlp/yt-dlp
 
-For project-specific issues, refer to the main [README.md](../README.md).
+For project-specific issues, refer to the main [README.md](./README.md).

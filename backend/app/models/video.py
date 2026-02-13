@@ -36,10 +36,10 @@ class DownloadRequest(BaseModel):
     )
     format_id: str = Field(
         ...,
-        description="Format ID from the formats list (e.g., '22', '140')",
+        description="Format ID from the formats list (e.g., '22', '140', 'bestvideo[height<=1080]+bestaudio/best')",
         min_length=1,
-        max_length=50,
-        examples=["22", "140", "best"],
+        max_length=200,
+        examples=["22", "140", "best", "bestvideo[height<=1080]+bestaudio/best"],
     )
 
     @field_validator("url", "format_id")

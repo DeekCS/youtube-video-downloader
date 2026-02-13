@@ -1,9 +1,11 @@
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile"
+dockerfileArgs = { NEXT_PUBLIC_API_BASE = "https://backend-production-46f2d.up.railway.app/api/v1" }
 
 [deploy]
 healthcheckPath = "/"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
+numReplicas = 1

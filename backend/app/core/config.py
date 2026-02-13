@@ -111,16 +111,6 @@ class Settings(BaseSettings):
         default=None,
         description="Browser to extract cookies from (chrome, firefox, edge, etc.)"
     )
-    YTDLP_USE_ARIA2C: bool = Field(
-        default=False,
-        description="Use aria2c as external downloader for better speed"
-    )
-    YTDLP_ARIA2C_MAX_CONNECTIONS: int = Field(
-        default=16,
-        ge=1,
-        le=32,
-        description="aria2c max connections per server"
-    )
     YTDLP_SPONSORBLOCK_REMOVE: str | None = Field(
         default=None,
         description="Remove sponsor segments (sponsor,intro,outro,selfpromo,preview,filler,interaction)"

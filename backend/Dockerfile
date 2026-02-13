@@ -5,7 +5,6 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies (including yt-dlp and ffmpeg)
-# Note: aria2 is not installed because Railway bans it for security reasons
 RUN apt-get update && apt-get install -y \
     curl \
     ffmpeg \

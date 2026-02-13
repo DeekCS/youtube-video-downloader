@@ -50,5 +50,7 @@ USER nextjs
 EXPOSE 3000
 
 ENV PORT=3000
+# Bind to all interfaces so Railway/Docker can route traffic
+ENV HOSTNAME=0.0.0.0
 
 CMD ["node", "server.js"]

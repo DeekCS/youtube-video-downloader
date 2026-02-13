@@ -48,7 +48,8 @@ async def fetch_formats(request: FormatsRequest) -> VideoInfo:
     Raises:
         Various VideoDownloaderError exceptions (handled by global handler)
     """
-    video_info = YtDlpService.fetch_formats(request.url)
+    # Run blocking yt-dlp call in a thread to avoid blocking the event loop
+    video_info = await asyncio.to_thread(YtDlpService.fetch_formats, request.url)
     return video_info
 
 
@@ -195,7 +196,9 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
         Streaming response with video file
     """
     # Prefer cached info from /formats to reduce slow-start latency
-    video_info = YtDlpService.get_cached_formats(request.url) or YtDlpService.fetch_formats(request.url)
+    video_info = YtDlpService.get_cached_formats(request.url)
+    if video_info is None:
+        video_info = await asyncio.to_thread(YtDlpService.fetch_formats, request.url)
 
     # Find the requested format
     selected_format = next(
@@ -214,6 +217,8 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
         "+" in request.format_id
         or request.format_id in {"best", "bestvideo", "bestaudio"}
         or request.format_id.startswith("best[")
+        or request.format_id.startswith("bestvideo[")
+        or request.format_id.startswith("merged-")
     )
     if is_merged_format:
         ext = "mp4"
@@ -248,7 +253,7 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
 )
 async def download_video_get(
     url: str = Query(..., description="Video URL", min_length=10, max_length=2048),
-    format_id: str = Query(..., description="Format ID from formats list", min_length=1, max_length=50),
+    format_id: str = Query(..., description="Format ID from formats list", min_length=1, max_length=200),
 ) -> StreamingResponse:
     """Download a video via GET request (for browser navigation).
 

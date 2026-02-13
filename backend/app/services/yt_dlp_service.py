@@ -313,38 +313,40 @@ class YtDlpService:
                 if not formats:
                     raise FormatNotAvailableError("No valid formats found")
 
-                # Add special best selector for combined MP4 formats (QuickTime compatible)
+                # Add special merged selectors that combine video+audio via ffmpeg
                 merged_formats = []
 
-                # Check if we have combined audio+video formats
-                has_combined_video = any(
-                    not f.is_video_only and not f.is_audio_only
-                    for f in formats
-                    if "video" in f.mime_type
-                )
-                combined_heights = []
+                # Collect available video resolutions (both combined and video-only)
+                available_heights: set[int] = set()
                 for f in formats:
-                    if f.is_video_only or f.is_audio_only:
-                        continue
-                    match = re.search(r"\d+", f.quality_label)
-                    if match:
-                        combined_heights.append(int(match.group(0)))
-                has_combined_720p = any(h >= 720 for h in combined_heights)
+                    match = re.search(r"(\d+)p", f.quality_label)
+                    if match and "video" in f.mime_type:
+                        available_heights.add(int(match.group(1)))
 
-                if has_combined_video:
-                    # Video already has audio - add QuickTime-compatible selectors
-                    merged_formats.append(Format(
-                        id="best",
-                        quality_label="Best Available (MP4)",
-                        mime_type="video/mp4",
-                        filesize_bytes=None,
-                        is_audio_only=False,
-                        is_video_only=False,
-                    ))
-                    if has_combined_720p:
+                # Define merged quality tiers (highest first)
+                merge_tiers = [
+                    (2160, "4K Ultra HD (2160p)", "merged-2160"),
+                    (1440, "QHD (1440p)",         "merged-1440"),
+                    (1080, "Full HD (1080p)",      "merged-1080"),
+                    (720,  "HD (720p)",            "merged-720"),
+                    (480,  "SD (480p)",            "merged-480"),
+                ]
+
+                # Always add a "Best Quality" merged option
+                merged_formats.append(Format(
+                    id="bestvideo+bestaudio/best",
+                    quality_label="Best Available (Merged)",
+                    mime_type="video/mp4",
+                    filesize_bytes=None,
+                    is_audio_only=False,
+                    is_video_only=False,
+                ))
+
+                for height, label, fmt_id in merge_tiers:
+                    if height in available_heights:
                         merged_formats.append(Format(
-                            id="best[height<=720]",
-                            quality_label="Best Available (MP4 up to 720p)",
+                            id=f"bestvideo[height<={height}]+bestaudio/best[height<={height}]/best",
+                            quality_label=f"{label} (Merged)",
                             mime_type="video/mp4",
                             filesize_bytes=None,
                             is_audio_only=False,
@@ -354,12 +356,20 @@ class YtDlpService:
                 # Prepend merged formats to the list
                 formats = merged_formats + formats
 
-                # Sort formats: merged first, then video formats (by quality), then audio
+                # Sort formats: merged first (best available first, then by resolution desc),
+                # then video formats (by quality), then audio
+                def _sort_height(f: Format) -> int:
+                    """Extract resolution height for sorting. Uses NNNp pattern to avoid '4' from '4K'."""
+                    m = re.search(r"(\d+)p", f.quality_label)
+                    return int(m.group(1)) if m else 0
+
                 formats.sort(
                     key=lambda f: (
-                        0 if "merged" in f.quality_label.lower() else 1,
+                        0 if "best available" in f.quality_label.lower() else (
+                            1 if "merged" in f.quality_label.lower() else 2
+                        ),
                         f.is_audio_only,  # Audio last
-                        -int(re.findall(r"\d+", f.quality_label)[0]) if re.findall(r"\d+", f.quality_label) else 0
+                        -_sort_height(f),
                     )
                 )
 
@@ -447,13 +457,14 @@ class YtDlpService:
         """Build a yt-dlp command that streams the selected format to stdout."""
         normalized_url = cls.normalize_url(url)
 
-        # Prefer QuickTime-compatible combined MP4 for "best" and merged selectors
+        # Determine if this is a merged format (video+audio via ffmpeg)
         format_spec = format_id
-        is_merged_format = "+" in format_id or format_id in ["best", "bestvideo", "bestaudio"]
-        if format_id.startswith("best["):
-            format_spec = f"b[ext=mp4]{format_id[len('best'):]}" + "/b[ext=mp4]/b"
-        elif is_merged_format:
-            format_spec = "b[ext=mp4]/b"
+        is_merged_format = (
+            "+" in format_id
+            or format_id in ["best", "bestvideo", "bestaudio"]
+            or format_id.startswith("bestvideo[")
+            or format_id.startswith("best[")
+        )
 
         cmd: list[str] = [
             "yt-dlp",
@@ -492,16 +503,9 @@ class YtDlpService:
         if settings.YTDLP_SPONSORBLOCK_REMOVE:
             cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
 
-        # No merge flags here: we only select already-combined MP4 streams
-
-        # Use aria2c as external downloader if enabled (much faster for non-fragmented downloads)
-        # Note: aria2c doesn't work well with merged formats or streaming to stdout, so skip it
-        if settings.YTDLP_USE_ARIA2C and not is_merged_format:
-            cmd.extend([
-                "--downloader", "aria2c",
-                "--downloader-args",
-                f"aria2c:-x {settings.YTDLP_ARIA2C_MAX_CONNECTIONS} -k 1M -j {settings.YTDLP_ARIA2C_MAX_CONNECTIONS} --optimize-concurrent-downloads=true --min-split-size=1M"
-            ])
+        # If this is a merged format (video+audio), tell yt-dlp to merge into MP4
+        if is_merged_format:
+            cmd.extend(["--merge-output-format", "mp4"])
 
         # Advanced YouTube extractor arguments for better anti-throttling
         # Note: iOS client can cause "format not available" errors for some videos
