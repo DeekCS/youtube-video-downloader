@@ -1,10 +1,11 @@
 'use client'
 
 import Image from 'next/image'
-import { Download, Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { Download, Loader2, CheckCircle, XCircle } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
 import {
   Table,
   TableBody,
@@ -16,7 +17,14 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { type VideoInfo, type Format } from '@/lib/api-client'
 import { formatFileSize, formatDuration } from '@/lib/utils'
-import { downloadVideo } from '@/lib/api-client'
+import {
+  downloadVideo,
+  startDownload,
+  subscribeToProgress,
+  buildTaskFileUrl,
+  isMergedFormat,
+  type DownloadProgress,
+} from '@/lib/api-client'
 
 interface FormatsTableProps {
   videoInfo: VideoInfo | null
@@ -93,33 +101,198 @@ function getCommonFormats(formats: Format[]): UserFriendlyFormat[] {
 }
 
 export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: FormatsTableProps) {
-  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set())
+  // Download progress state per format ID
+  const [dlStates, setDlStates] = useState<Record<string, DownloadProgress & { downloading?: boolean }>>({})
+  // Track SSE cleanup functions so we can close on unmount
+  const cleanupFns = useRef<Record<string, () => void>>({})
 
-  const handleDownload = async (formatId: string, filename: string) => {
+  useEffect(() => {
+    return () => {
+      Object.values(cleanupFns.current).forEach((fn) => fn())
+      cleanupFns.current = {}
+    }
+  }, [])
+
+  // Overall progress mapped to 0-100 for the bar
+  const getOverallProgress = useCallback((p: DownloadProgress): number => {
+    if (p.status === 'completed') return 100
+    if (p.status === 'merging') return 92
+    return p.progress
+  }, [])
+
+  // Human-readable status label
+  const getStatusLabel = useCallback((p: DownloadProgress): string => {
+    if (p.status === 'failed') return p.error || 'Download failed'
+    if (p.status === 'completed') return 'Complete — saving…'
+    if (p.status === 'merging') return 'Merging streams…'
+    if (p.status === 'downloading') {
+      if (p.phase === 'video') return 'Downloading video…'
+      if (p.phase === 'audio') return 'Downloading audio…'
+      return 'Downloading…'
+    }
+    return 'Preparing…'
+  }, [])
+
+  /** Start a progress-tracked merged download. */
+  const handleMergedDownload = async (formatId: string) => {
+    setDlStates((s) => ({
+      ...s,
+      [formatId]: { status: 'pending', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloading: true },
+    }))
+
     try {
-      // Mark as downloading
-      setDownloadingIds(prev => new Set(prev).add(formatId))
+      const { downloadId } = await startDownload(originalUrl, formatId)
 
-      // Trigger download via browser
-      await downloadVideo(originalUrl, formatId, filename)
+      const cleanup = subscribeToProgress(
+        downloadId,
+        (progress) => {
+          setDlStates((s) => ({ ...s, [formatId]: { ...progress, downloading: true } }))
 
-      // Keep showing downloading state for a moment
+          if (progress.status === 'completed') {
+            // Trigger the actual file download via hidden link
+            const link = document.createElement('a')
+            link.href = buildTaskFileUrl(downloadId)
+            link.style.display = 'none'
+            document.body.appendChild(link)
+            link.click()
+            setTimeout(() => {
+              document.body.removeChild(link)
+              setDlStates((s) => {
+                const next = { ...s }
+                delete next[formatId]
+                return next
+              })
+            }, 2500)
+          }
+
+          if (progress.status === 'failed') {
+            setTimeout(() => {
+              setDlStates((s) => {
+                const next = { ...s }
+                delete next[formatId]
+                return next
+              })
+            }, 5000)
+          }
+        },
+        () => {
+          // SSE connection error
+          setDlStates((s) => ({
+            ...s,
+            [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, error: 'Connection lost', downloading: true },
+          }))
+          setTimeout(() => {
+            setDlStates((s) => {
+              const next = { ...s }
+              delete next[formatId]
+              return next
+            })
+          }, 5000)
+        },
+      )
+
+      cleanupFns.current[formatId] = cleanup
+    } catch {
+      setDlStates((s) => ({
+        ...s,
+        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, error: 'Failed to start', downloading: true },
+      }))
       setTimeout(() => {
-        setDownloadingIds(prev => {
-          const newSet = new Set(prev)
-          newSet.delete(formatId)
-          return newSet
+        setDlStates((s) => {
+          const next = { ...s }
+          delete next[formatId]
+          return next
+        })
+      }, 5000)
+    }
+  }
+
+  /** Direct GET link for single-stream formats (browser handles progress). */
+  const handleDirectDownload = async (formatId: string, filename: string) => {
+    setDlStates((s) => ({
+      ...s,
+      [formatId]: { status: 'downloading', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloading: true },
+    }))
+
+    try {
+      await downloadVideo(originalUrl, formatId, filename)
+      setTimeout(() => {
+        setDlStates((s) => {
+          const next = { ...s }
+          delete next[formatId]
+          return next
         })
       }, 2000)
-    } catch (error) {
-      console.error('Download failed:', error)
-      alert('Download failed. Please try again.')
-      setDownloadingIds(prev => {
-        const newSet = new Set(prev)
-        newSet.delete(formatId)
-        return newSet
-      })
+    } catch {
+      setDlStates((s) => ({
+        ...s,
+        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, error: 'Download failed', downloading: true },
+      }))
+      setTimeout(() => {
+        setDlStates((s) => {
+          const next = { ...s }
+          delete next[formatId]
+          return next
+        })
+      }, 5000)
     }
+  }
+
+  const handleDownload = (format: UserFriendlyFormat) => {
+    const ext = format.is_audio_only ? 'm4a' : 'mp4'
+    const filename = `${videoInfo?.title || 'video'}.${ext}`
+    if (isMergedFormat(format.id)) {
+      handleMergedDownload(format.id)
+    } else {
+      handleDirectDownload(format.id, filename)
+    }
+  }
+
+  /** Render the download button or progress indicator for a given format. */
+  const renderDownloadControl = (format: UserFriendlyFormat, fullWidth = false) => {
+    const state = dlStates[format.id]
+    if (!state?.downloading) {
+      return (
+        <Button
+          size="sm"
+          variant="outline"
+          className={fullWidth ? 'w-full' : ''}
+          onClick={() => handleDownload(format)}
+        >
+          <Download className="h-4 w-4 mr-1" />
+          Download
+        </Button>
+      )
+    }
+
+    const overall = getOverallProgress(state)
+    const label = getStatusLabel(state)
+    const isFailed = state.status === 'failed'
+    const isComplete = state.status === 'completed'
+    const showBar = !isFailed && state.status !== 'pending'
+    const isIndeterminate = state.status === 'merging' || state.status === 'pending'
+
+    return (
+      <div className={`space-y-1.5 ${fullWidth ? 'w-full' : 'min-w-[180px]'}`}>
+        {showBar && (
+          <Progress
+            value={isIndeterminate ? undefined : overall}
+            className={`h-2 ${isIndeterminate ? 'animate-pulse' : ''}`}
+          />
+        )}
+        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1 truncate">
+            {isFailed && <XCircle className="h-3 w-3 text-red-500 flex-shrink-0" />}
+            {isComplete && <CheckCircle className="h-3 w-3 text-green-500 flex-shrink-0" />}
+            {!isFailed && !isComplete && <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />}
+            <span className="truncate">{label}</span>
+          </span>
+          {state.speed && !isFailed && !isComplete && (
+            <span className="whitespace-nowrap">{state.speed}</span>
+          )}
+        </div>
+      </div>
+    )
   }
 
   const commonFormats = videoInfo ? getCommonFormats(videoInfo.formats) : []
@@ -184,7 +357,6 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
             {/* Mobile: card layout */}
             <div className="flex flex-col gap-3 sm:hidden">
               {commonFormats.map((format) => {
-                const isDownloading = downloadingIds.has(format.id)
                 return (
                   <div
                     key={format.id}
@@ -201,29 +373,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
                         </span>
                       )}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full"
-                      onClick={() => {
-                        const ext = format.is_audio_only ? 'm4a' : 'mp4'
-                        const filename = `${videoInfo?.title}.${ext}`
-                        handleDownload(format.id, filename)
-                      }}
-                      disabled={isDownloading}
-                    >
-                      {isDownloading ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                          Starting...
-                        </>
-                      ) : (
-                        <>
-                          <Download className="h-4 w-4 mr-1" />
-                          Download
-                        </>
-                      )}
-                    </Button>
+                    {renderDownloadControl(format, true)}
                   </div>
                 )
               })}
@@ -242,8 +392,6 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
                 </TableHeader>
                 <TableBody>
                   {commonFormats.map((format) => {
-                    const isDownloading = downloadingIds.has(format.id)
-
                     return (
                       <TableRow key={format.id}>
                         <TableCell className="font-medium">{format.friendlyLabel}</TableCell>
@@ -257,28 +405,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
                         </TableCell>
                         <TableCell>{formatFileSize(format.filesize_bytes)}</TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              const ext = format.is_audio_only ? 'm4a' : 'mp4'
-                              const filename = `${videoInfo?.title}.${ext}`
-                              handleDownload(format.id, filename)
-                            }}
-                            disabled={isDownloading}
-                          >
-                            {isDownloading ? (
-                              <>
-                                <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                                Starting...
-                              </>
-                            ) : (
-                              <>
-                                <Download className="h-4 w-4" />
-                                Download
-                              </>
-                            )}
-                          </Button>
+                          {renderDownloadControl(format)}
                         </TableCell>
                       </TableRow>
                     )

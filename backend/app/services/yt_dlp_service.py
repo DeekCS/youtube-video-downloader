@@ -56,6 +56,12 @@ MERGE_TIERS = [
     (480,  "SD (480p)",            "merged-480"),
 ]
 
+# Regex helpers for parsing yt-dlp progress output (used with --newline)
+_PROGRESS_PCT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
+_SPEED_RE = re.compile(r"at\s+([\d.]+\s*\S+/s)")
+_ETA_RE = re.compile(r"ETA\s+(\S+)")
+_DESTINATION_RE = re.compile(r"\[download\]\s+Destination:")
+_MERGER_RE = re.compile(r"\[Merger\]")
 
 class YtDlpService:
     """Service for interacting with yt-dlp."""
@@ -604,6 +610,193 @@ class YtDlpService:
             f"Merged download complete: {file_size:,} bytes for {safe_url}"
         )
         return actual_path, temp_dir
+
+    @classmethod
+    def download_merged_with_progress(
+        cls,
+        url: str,
+        format_id: str,
+        task: Any,
+    ) -> None:
+        """Download merged format with real-time progress tracking.
+
+        Uses ``subprocess.Popen`` so stderr can be read line-by-line while
+        yt-dlp runs, parsing ``[download]`` progress lines in a reader
+        thread and updating *task* fields in place.
+
+        On success the task will have ``status="completed"`` with
+        ``file_path`` / ``temp_dir`` populated.  On failure ``status``
+        will be ``"failed"`` with ``error`` set.
+
+        Args:
+            url: Video URL
+            format_id: Merged format selector string
+            task: A :class:`~app.services.download_tasks.DownloadTask`
+                  whose attributes are mutated as progress arrives.
+        """
+        if not FORMAT_ID_PATTERN.match(format_id):
+            task.status = "failed"
+            task.error = "Invalid format_id"
+            return
+
+        normalized_url = cls.normalize_url(url)
+        safe_url = cls._sanitize_url_for_logging(normalized_url)
+
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_")
+        dl_id = uuid.uuid4().hex[:12]
+        output_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
+        is_two_stream = "+" in format_id
+
+        cmd: list[str] = [
+            "yt-dlp",
+            "-f", format_id,
+            "-o", output_template,
+            "--merge-output-format", "mp4",
+            "--no-part",
+            "--newline",       # one line per progress update
+            "--progress",      # force progress even when not a TTY
+            "--no-playlist",
+            "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
+            "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
+            "--buffer-size", settings.YTDLP_BUFFER_SIZE,
+            "--socket-timeout", str(settings.YTDLP_SOCKET_TIMEOUT),
+            "--retries", str(settings.YTDLP_RETRIES),
+            "--fragment-retries", str(settings.YTDLP_FRAGMENT_RETRIES),
+            "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
+            "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
+        ]
+
+        if settings.YTDLP_SLEEP_REQUESTS > 0:
+            cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
+        if settings.YTDLP_USER_AGENT:
+            cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
+        if settings.YTDLP_HTTP_CHUNK_SIZE:
+            cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
+        if settings.YTDLP_SPONSORBLOCK_REMOVE:
+            cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
+        if settings.YTDLP_COOKIES_FROM_BROWSER:
+            cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
+        if settings.YTDLP_PROXY:
+            cmd.extend(["--proxy", settings.YTDLP_PROXY])
+
+        cmd.append(normalized_url)
+
+        task.status = "downloading"
+        task.phase = "video" if is_two_stream else ""
+
+        logger.info(
+            f"Starting progress-tracked download for {format_id} from {safe_url}"
+        )
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+
+        stream_index = -1  # bumped on each [download] Destination: line
+
+        def _read_stdout() -> None:
+            """Background thread: parse yt-dlp stdout for progress."""
+            nonlocal stream_index
+            if process.stdout is None:
+                return
+            try:
+                # Use readline() instead of ``for line in ...`` to avoid
+                # Python's read-ahead buffer which delays progress updates.
+                while True:
+                    line = process.stdout.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Stream switch
+                    if _DESTINATION_RE.search(line):
+                        stream_index += 1
+                        if is_two_stream:
+                            task.phase = "video" if stream_index == 0 else "audio"
+                        task.speed = ""
+                        task.eta = ""
+                        continue
+
+                    # Merge phase
+                    if _MERGER_RE.search(line):
+                        task.status = "merging"
+                        task.phase = "merge"
+                        task.progress = 92.0
+                        task.speed = ""
+                        task.eta = ""
+                        continue
+
+                    # Download progress percentage
+                    pct_m = _PROGRESS_PCT_RE.search(line)
+                    if pct_m:
+                        raw = float(pct_m.group(1))
+                        if is_two_stream:
+                            if stream_index <= 0:
+                                task.progress = raw * 0.65
+                            else:
+                                task.progress = 65.0 + raw * 0.25
+                        else:
+                            task.progress = raw * 0.90
+                        task.progress = min(task.progress, 91.0)
+
+                        spd_m = _SPEED_RE.search(line)
+                        if spd_m:
+                            task.speed = spd_m.group(1)
+                        eta_m = _ETA_RE.search(line)
+                        if eta_m:
+                            task.eta = eta_m.group(1)
+            except Exception:
+                pass  # best-effort; don't crash on parse errors
+
+        reader = threading.Thread(target=_read_stdout, daemon=True)
+        reader.start()
+
+        try:
+            return_code = process.wait(timeout=3600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = "Download timed out (1-hour limit)"
+            return
+
+        reader.join(timeout=5)
+
+        if return_code != 0:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = "Download failed"
+            logger.error(
+                f"Progress download failed ({return_code}) for {safe_url}"
+            )
+            return
+
+        # Find output file
+        files = [f for f in os.listdir(temp_dir) if not f.startswith(".")]
+        if not files:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = "Download produced no output"
+            return
+
+        actual_path = os.path.join(temp_dir, files[0])
+        task.file_path = actual_path
+        task.temp_dir = temp_dir
+        task.file_size = os.path.getsize(actual_path)
+        task.progress = 100.0
+        task.status = "completed"
+        task.speed = ""
+        task.eta = ""
+        logger.info(
+            f"Progress download complete: {task.file_size:,} bytes for {safe_url}"
+        )
 
     @classmethod
     def download_format(

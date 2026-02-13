@@ -158,88 +158,94 @@ export async function downloadVideo(
 }
 
 /**
- * Progress update from download API
+ * Progress update from SSE download endpoint.
  */
 export interface DownloadProgress {
-  status: 'starting' | 'downloading' | 'complete' | 'error'
+  status: 'pending' | 'downloading' | 'merging' | 'completed' | 'failed'
   progress: number
-  downloaded_bytes: number
-  total_bytes: number
-  speed: number
-  eta: number | null
-  filename: string
-  message?: string
+  phase: string
+  speed: string
+  eta: string
+  file_size: number
+  error?: string
 }
 
 /**
- * Start a download with progress tracking
+ * Start a progress-tracked download (merged formats).
  */
-export async function startDownloadWithProgress(
+export async function startDownload(
   url: string,
   formatId: string
-): Promise<{ downloadId: string; progressUrl: string }> {
-  try {
-    const response = await fetch(`${env.API_BASE}/videos/download/with-progress`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url, format_id: formatId }),
-    })
+): Promise<{ downloadId: string; filename: string }> {
+  const response = await fetch(`${env.API_BASE}/videos/download/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, format_id: formatId }),
+  })
 
-    if (!response.ok) {
-      throw new ApiError('INTERNAL_ERROR', 'Failed to start download')
-    }
-
-    const data = await response.json()
-    return {
-      downloadId: data.download_id,
-      progressUrl: `${env.API_BASE}${data.progress_url}`,
-    }
-  } catch (error) {
-    if (error instanceof ApiError) {
-      throw error
-    }
-    throw new ApiError('INTERNAL_ERROR', 'Failed to start download')
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new ApiError(
+      data.code || 'INTERNAL_ERROR',
+      data.message || 'Failed to start download',
+      response.status
+    )
   }
+
+  const data = await response.json()
+  return { downloadId: data.download_id, filename: data.filename }
 }
 
 /**
- * Subscribe to download progress updates via SSE
+ * Subscribe to download progress events via SSE.
+ * Returns a cleanup function to close the connection.
  */
 export function subscribeToProgress(
-  progressUrl: string,
+  downloadId: string,
   onProgress: (progress: DownloadProgress) => void,
   onError?: (error: Error) => void
 ): () => void {
-  const eventSource = new EventSource(progressUrl)
+  const url = `${env.API_BASE}/videos/download/${downloadId}/progress`
+  const eventSource = new EventSource(url)
 
-  eventSource.onmessage = (event) => {
+  eventSource.addEventListener('progress', (event: MessageEvent) => {
     try {
       const progress: DownloadProgress = JSON.parse(event.data)
       onProgress(progress)
-
-      // Close connection when complete or error
-      if (progress.status === 'complete' || progress.status === 'error') {
+      if (progress.status === 'completed' || progress.status === 'failed') {
         eventSource.close()
       }
-    } catch (error) {
-      console.error('Failed to parse progress event:', error)
+    } catch {
+      // ignore parse errors
     }
+  })
+
+  eventSource.onerror = () => {
+    eventSource.close()
+    onError?.(new Error('Progress connection lost'))
   }
 
-  eventSource.onerror = (error) => {
-    console.error('SSE error:', error)
-    eventSource.close()
-    if (onError) {
-      onError(new Error('Connection to progress stream failed'))
-    }
-  }
+  return () => eventSource.close()
+}
 
-  // Return cleanup function
-  return () => {
-    eventSource.close()
-  }
+/**
+ * Build URL to fetch the completed file for a download task.
+ */
+export function buildTaskFileUrl(downloadId: string): string {
+  return `${env.API_BASE}/videos/download/${downloadId}/file`
+}
+
+/**
+ * Check whether a format ID represents a merged (video+audio) download.
+ */
+export function isMergedFormat(formatId: string): boolean {
+  return (
+    formatId.includes('+') ||
+    formatId === 'best' ||
+    formatId === 'bestvideo' ||
+    formatId.startsWith('best[') ||
+    formatId.startsWith('bestvideo[')
+  )
 }
 
 /**
