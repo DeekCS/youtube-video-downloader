@@ -107,6 +107,10 @@ class Settings(BaseSettings):
         default=False,
         description="Use iOS player client for YouTube (often less throttled)"
     )
+    YTDLP_COOKIES_FILE: str | None = Field(
+        default=None,
+        description="Path to Netscape-format cookies.txt file for YouTube authentication"
+    )
     YTDLP_COOKIES_FROM_BROWSER: str | None = Field(
         default=None,
         description="Browser to extract cookies from (chrome, firefox, edge, etc.)"

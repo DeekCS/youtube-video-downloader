@@ -63,6 +63,16 @@ downloads/
 tmp/
 temp/
 
+# Cookies (sensitive auth data)
+cookies.txt
+cookies_base64.txt
+cookies_min.txt
+cookies_yt.txt
+**/cookies.txt
+**/cookies_base64.txt
+**/cookies_min.txt
+**/cookies_yt.txt
+
 # Logs
 logs/
 *.log

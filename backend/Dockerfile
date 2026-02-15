@@ -8,11 +8,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     curl \
     ffmpeg \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install yt-dlp
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
+# Install deno (JS runtime required by yt-dlp for YouTube n-challenge solving)
+RUN curl -fsSL https://deno.land/install.sh | sh \
+    && ln -s /root/.deno/bin/deno /usr/local/bin/deno
 
 # Install uv for faster dependency management
 RUN pip install --no-cache-dir uv
@@ -23,8 +24,19 @@ COPY pyproject.toml README.md ./
 # Install Python dependencies
 RUN uv pip install --system --no-cache -e .
 
+# Install yt-dlp binary (always fetch latest – cache-bust via ADD)
+ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp /usr/local/bin/yt-dlp
+RUN chmod a+rx /usr/local/bin/yt-dlp
+
+# Ensure the Python yt-dlp package is also the latest
+RUN uv pip install --system --no-cache --upgrade yt-dlp
+
 # Copy application code
 COPY app ./app
+
+# Copy entrypoint script (decodes cookies from env var)
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Expose port (Railway injects PORT env var)
 EXPOSE 8000
@@ -38,5 +50,8 @@ ENV PORT=8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
+# Entrypoint decodes cookies, then runs the CMD
+ENTRYPOINT ["/app/entrypoint.sh"]
+
 # Run the application with uvicorn (Railway injects PORT, defaults to 8000)
-CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]

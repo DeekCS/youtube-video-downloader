@@ -362,6 +362,7 @@ class YtDlpService:
             "concurrent_fragments": settings.YTDLP_CONCURRENT_FRAGMENTS,
             "fragment_retries": settings.YTDLP_FRAGMENT_RETRIES,
             "socket_timeout": settings.YTDLP_SOCKET_TIMEOUT,
+            "remote_components": {"ejs": "github"},
         }
 
         if settings.YTDLP_PREFER_FREE_FORMATS:
@@ -370,7 +371,9 @@ class YtDlpService:
         if settings.YTDLP_USER_AGENT:
             ydl_opts["http_headers"] = {"User-Agent": settings.YTDLP_USER_AGENT}
 
-        if settings.YTDLP_COOKIES_FROM_BROWSER:
+        if settings.YTDLP_COOKIES_FILE:
+            ydl_opts["cookiefile"] = settings.YTDLP_COOKIES_FILE
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
             ydl_opts["cookiesfrombrowser"] = (settings.YTDLP_COOKIES_FROM_BROWSER,)
 
         if settings.YTDLP_PROXY:
@@ -431,7 +434,7 @@ class YtDlpService:
                 logger.warning(f"Video not found: {safe_url}")
                 raise VideoNotFoundError()
 
-            if "livestream" in error_msg or "/live/" in url:
+            if "livestream" in error_msg:
                 raise YtdlpFailedError(
                     "This livestream may not be available yet or has ended. "
                     "Please try again later."
@@ -568,6 +571,7 @@ class YtDlpService:
             "--no-warnings",
             "--quiet",
             "--no-playlist",
+            "--remote-components", "ejs:github",
             "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
             "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
             "--buffer-size", settings.YTDLP_BUFFER_SIZE,
@@ -586,7 +590,9 @@ class YtDlpService:
             cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
         if settings.YTDLP_SPONSORBLOCK_REMOVE:
             cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
-        if settings.YTDLP_COOKIES_FROM_BROWSER:
+        if settings.YTDLP_COOKIES_FILE:
+            cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
             cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
         if settings.YTDLP_PROXY:
             cmd.extend(["--proxy", settings.YTDLP_PROXY])
@@ -672,6 +678,7 @@ class YtDlpService:
             "--newline",       # one line per progress update
             "--progress",      # force progress even when not a TTY
             "--no-playlist",
+            "--remote-components", "ejs:github",
             "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
             "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
             "--buffer-size", settings.YTDLP_BUFFER_SIZE,
@@ -690,7 +697,9 @@ class YtDlpService:
             cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
         if settings.YTDLP_SPONSORBLOCK_REMOVE:
             cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
-        if settings.YTDLP_COOKIES_FROM_BROWSER:
+        if settings.YTDLP_COOKIES_FILE:
+            cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
             cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
         if settings.YTDLP_PROXY:
             cmd.extend(["--proxy", settings.YTDLP_PROXY])
@@ -901,6 +910,7 @@ class YtDlpService:
             "--no-warnings",
             "--quiet",
             "--no-playlist",
+            "--remote-components", "ejs:github",
             "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
             "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
             "--buffer-size", settings.YTDLP_BUFFER_SIZE,
@@ -930,8 +940,10 @@ class YtDlpService:
         if settings.YTDLP_SPONSORBLOCK_REMOVE:
             cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
 
-        # Browser cookies (can bypass throttling)
-        if settings.YTDLP_COOKIES_FROM_BROWSER:
+        # Cookies for authentication (file preferred over browser on servers)
+        if settings.YTDLP_COOKIES_FILE:
+            cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
             cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
 
         # Proxy (can help with regional throttling)
