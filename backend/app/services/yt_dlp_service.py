@@ -362,7 +362,7 @@ class YtDlpService:
             "concurrent_fragments": settings.YTDLP_CONCURRENT_FRAGMENTS,
             "fragment_retries": settings.YTDLP_FRAGMENT_RETRIES,
             "socket_timeout": settings.YTDLP_SOCKET_TIMEOUT,
-            "remote_components": {"ejs": "github"},
+            "remote_components": {"ejs:github"},
         }
 
         if settings.YTDLP_PREFER_FREE_FORMATS:
