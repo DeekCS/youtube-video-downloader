@@ -250,6 +250,13 @@ Example: `https://frontend-production-xyz789.up.railway.app`
 | `${{Backend.RAILWAY_PUBLIC_DOMAIN}}` is empty | Ensure the backend service is named exactly `Backend` (or update the reference to match your service name) |
 | Changes to `NEXT_PUBLIC_API_BASE` don't take effect | This variable is baked at build time — you must trigger a **redeploy** of the frontend service |
 
+### Railway CLI (`backboard.railway.com` / GraphQL)
+
+| Problem | Solution |
+|---------|----------|
+| `Failed to fetch` … `backboard.railway.com/graphql/v2` … **operation timed out** | Transient network or Railway API slowness. Retry the command (`railway redeploy`, `railway status`, etc.). Turn off VPN or try another network; check [Railway status](https://status.railway.com). If one call times out and the next prints success (e.g. “redeployed”), the action may still have completed—confirm in the dashboard **Deployments**. |
+| CLI works only sometimes | Upgrade: `railway upgrade`. Re-login: `railway login`. |
+
 ---
 
 ## Monitoring
