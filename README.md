@@ -212,13 +212,19 @@ docker-compose up
    ```
    NEXT_PUBLIC_API_BASE=https://your-backend.up.railway.app/api/v1
    ```
-4. Railway will auto-detect Next.js and run:
-   ```bash
-   pnpm install
-   pnpm build
-   pnpm start
-   ```
+4. Railway builds from `frontend/Dockerfile` (see `frontend/railway.toml`). Set `NEXT_PUBLIC_API_BASE` before build.
 5. Verify: Navigate to the frontend URL and test the downloader flow
+
+Full walkthrough, variable references, and troubleshooting: **[RAILWAY.md](./RAILWAY.md)**.
+
+### CLI (variables, domains, redeploy, logs)
+
+```bash
+npm i -g @railway/cli && railway login && railway link
+./scripts/railway-bootstrap.sh   # sets env, domains, redeploys backend + frontend
+```
+
+Copy-paste commands: [RAILWAY.md → Setup with Railway CLI](./RAILWAY.md#setup-with-railway-cli).
 
 ### Monitoring
 

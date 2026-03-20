@@ -1,7 +1,8 @@
 [build]
 builder = "dockerfile"
 dockerfilePath = "Dockerfile"
-dockerfileArgs = { NEXT_PUBLIC_API_BASE = "https://backend-production-46f2d.up.railway.app/api/v1" }
+# Pass the service variable into Docker build (set NEXT_PUBLIC_API_BASE in Railway → Variables, enable "Build")
+dockerfileArgs = { NEXT_PUBLIC_API_BASE = "${{NEXT_PUBLIC_API_BASE}}" }
 
 [deploy]
 healthcheckPath = "/"

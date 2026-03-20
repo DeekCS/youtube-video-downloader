@@ -6,10 +6,11 @@ This guide walks you through deploying the Video Downloader monorepo to Railway 
 
 1. A [Railway](https://railway.app) account
 2. This repository pushed to GitHub (or GitLab/Bitbucket)
-3. Railway CLI installed (optional, for local testing):
+3. Railway CLI (recommended for logs, variables, and redeploys):
    ```bash
    npm install -g @railway/cli
    ```
+   See [Setup with Railway CLI](#setup-with-railway-cli) below.
 
 ## Overview
 
@@ -68,6 +69,24 @@ BLOCK_PRIVATE_NETWORKS=true
 ALLOWED_URL_SCHEMES=http,https
 ```
 
+**yt-dlp / YouTube (optional but recommended):** The backend defaults in code already use `YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded` (avoids “Requested format is not available” when the iOS client is used without a PO token). You do **not** have to set anything for basic YouTube support.
+
+For production tuning (aligned with `docker-compose.yml`), you may add:
+
+```env
+YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
+YTDLP_USE_IOS_CLIENT=false
+YTDLP_CONCURRENT_FRAGMENTS=32
+YTDLP_HTTP_CHUNK_SIZE=
+YTDLP_STREAM_CHUNK_SIZE=2097152
+YTDLP_BUFFER_SIZE=1M
+YTDLP_SOCKET_TIMEOUT=60
+YTDLP_THROTTLED_RATE=50K
+YTDLP_PREFER_FREE_FORMATS=true
+```
+
+**Authenticated YouTube (cookies):** Use `YTDLP_COOKIES_BASE64` or chunked `YTDLP_COOKIES_BASE64_1`, `_2`, … (see `backend/entrypoint.sh`). Railway caps each variable at **32KB** — use `./scripts/railway-cookies-chunks.sh` for large cookie files.
+
 **For CORS**, use Railway's variable reference to auto-discover the frontend domain:
 
 ```env
@@ -117,6 +136,8 @@ NEXT_PUBLIC_API_BASE=https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1
 
 > Replace `Backend` with whatever you named your backend service. This variable is passed as a Docker build arg and baked into the Next.js bundle at build time.
 
+**Build-time requirement:** `NEXT_PUBLIC_*` must be available when Docker runs `pnpm build`. The repo’s `frontend/railway.toml` maps `NEXT_PUBLIC_API_BASE` into `dockerfileArgs` via `${{NEXT_PUBLIC_API_BASE}}`. In Railway, add the variable above and ensure it applies to **Build** (Railway usually does for Docker builds when the variable is referenced in the build).
+
 **Or set manually:**
 ```env
 NEXT_PUBLIC_API_BASE=https://your-backend-url.up.railway.app/api/v1
@@ -148,6 +169,7 @@ Example: `https://frontend-production-xyz789.up.railway.app`
 | Backend  | `LOG_LEVEL` | `INFO` |
 | Backend  | `BLOCK_PRIVATE_NETWORKS` | `true` |
 | Backend  | `ALLOWED_URL_SCHEMES` | `http,https` |
+| Backend  | `YTDLP_YOUTUBE_PLAYER_CLIENT` | `tv_embedded` (optional; same default in app code) |
 | Frontend | `NEXT_PUBLIC_API_BASE` | `https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1` |
 
 > **Important**: After setting `NEXT_PUBLIC_API_BASE`, you may need to trigger a **redeploy** of the frontend because this value is baked in at build time. Go to the frontend service → Deployments → Redeploy.
@@ -206,7 +228,10 @@ Example: `https://frontend-production-xyz789.up.railway.app`
 | `/health` returns 502 or timeout | Check Backend logs for startup errors; ensure Dockerfile builds successfully |
 | CORS errors in browser console | Verify `CORS_ORIGINS` matches the Frontend domain exactly (include `https://`) |
 | yt-dlp fails with "command not found" | Ensure the Dockerfile installs yt-dlp correctly (it's included in the provided Dockerfile) |
+| `FORMAT_NOT_AVAILABLE` / "Requested format is not available" (YouTube) | Do **not** set `player_client=ios` without a PO token. Keep `YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded` (default in code) or leave unset. See [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). |
+| `YTDLP_COOKIES_BASE64` exceeds maximum length 32768 | Delete that variable (or cancel the pending change), then run `./scripts/railway-cookies-chunks.sh /path/to/cookies.txt` to upload `YTDLP_COOKIES_BASE64_1`, `_2`, … |
 | Downloads timeout | Increase service memory in Settings → Resources; Railway default timeout is 5 min |
+| Frontend shows API errors / wrong backend | `NEXT_PUBLIC_API_BASE` must point at your backend with `/api/v1`; **redeploy** frontend after changing it. Do not rely on a hardcoded URL — set the variable in Railway. |
 
 ### Frontend Issues
 
@@ -237,11 +262,11 @@ npm install -g @railway/cli
 railway login
 railway link
 
-# View backend logs
-railway logs --service backend
+# View backend logs (use your exact service name, e.g. Backend)
+railway logs -s Backend
 
 # View frontend logs
-railway logs --service frontend
+railway logs -s Frontend
 ```
 
 ---
@@ -254,3 +279,142 @@ railway logs --service frontend
 - yt-dlp Docs: https://github.com/yt-dlp/yt-dlp
 
 For project-specific issues, refer to the main [README.md](./README.md).
+
+---
+
+## Setup with Railway CLI
+
+Use this after you have a Railway **project** with **two services** (same repo, root directories `backend` and `frontend`) connected to GitHub.
+
+### Terminal paste tips
+
+- Run **one command per line** (or use `;` between commands). Pasting `./scripts/railway-bootstrap.sh` and `cd ...` **without a newline** creates `./scripts/railway-bootstrap.shcd` and fails.
+- Do **not** paste lines that start with `#` from docs unless your shell treats them as comments (some copied “smart” `#` characters are not ASCII and zsh may try to run `#` as a command).
+- For cookies, use a **real path** to your file, not the placeholder `/path/to/your/cookies.txt`.
+
+The helper scripts **`railway-set-env.sh`**, **`railway-bootstrap.sh`**, and **`railway-cookies-chunks.sh`** resolve service names from `railway status --json` (matching `rootDirectory` `backend` / `frontend`). You can still override with `RAILWAY_BACKEND_SERVICE` / `RAILWAY_FRONTEND_SERVICE`.
+
+### 1. Install and link
+
+```bash
+npm install -g @railway/cli
+railway login
+cd /path/to/youtube-video-downloader
+railway link    # pick your project (monorepo root is fine)
+```
+
+### 2. Public URLs (once per service)
+
+`-s` must match the **exact** service name (case-sensitive), e.g. `Backend` and `Frontend` as shown in the dashboard.
+
+```bash
+railway domain -s Backend
+railway domain -s Frontend
+```
+
+### 3. Set variables (copy-paste)
+
+Replace `Backend` / `Frontend` with your **exact** Railway service names if they differ.  
+The `${{ … }}` tokens must match what Railway shows when you insert a reference (usually the same as the service name).
+
+**Backend:**
+
+```bash
+railway variable set --skip-deploys -s Backend \
+  ENV=production \
+  API_V1_PREFIX=/api/v1 \
+  LOG_LEVEL=INFO \
+  BLOCK_PRIVATE_NETWORKS=true \
+  ALLOWED_URL_SCHEMES=http,https \
+  YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded \
+  YTDLP_USE_IOS_CLIENT=false \
+  YTDLP_CONCURRENT_FRAGMENTS=32 \
+  YTDLP_STREAM_CHUNK_SIZE=2097152 \
+  YTDLP_BUFFER_SIZE=1M \
+  YTDLP_SOCKET_TIMEOUT=60 \
+  YTDLP_FILE_ACCESS_RETRIES=5 \
+  YTDLP_THROTTLED_RATE=50K \
+  YTDLP_PREFER_FREE_FORMATS=true
+
+railway variable set --skip-deploys -s Backend \
+  'CORS_ORIGINS=https://${{Frontend.RAILWAY_PUBLIC_DOMAIN}}'
+```
+
+**Frontend:**
+
+```bash
+railway variable set --skip-deploys -s Frontend \
+  'NEXT_PUBLIC_API_BASE=https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1'
+```
+
+If your services use other names, change both `-s` and the `${{…}}` tokens, e.g. `'CORS_ORIGINS=https://${{my-frontend.RAILWAY_PUBLIC_DOMAIN}}'`.
+
+### 4. Redeploy (apply variables / rebuild frontend)
+
+```bash
+railway redeploy -y -s Backend
+railway redeploy -y -s Frontend
+```
+
+`NEXT_PUBLIC_*` is baked at **build** time; always redeploy the frontend after changing it.
+
+### 5. Verify
+
+```bash
+railway variable list -s Backend -k
+railway variable list -s Frontend -k
+railway logs -s Backend
+railway logs -s Frontend
+```
+
+Open `https://<backend-domain>/health` and your frontend URL; test **Fetch formats** in the UI.
+
+### Helper scripts (from monorepo root)
+
+**Full flow** (variables + try domains + redeploy both services) — run after `railway login` and `railway link`:
+
+```bash
+chmod +x scripts/railway-bootstrap.sh scripts/railway-set-env.sh   # first time only
+./scripts/railway-bootstrap.sh
+```
+
+**Variables only** (no redeploy; prints redeploy commands):
+
+```bash
+./scripts/railway-set-env.sh
+```
+
+Override service slugs / reference names if needed:
+
+```bash
+RAILWAY_BACKEND_SERVICE=my-api \
+RAILWAY_FRONTEND_SERVICE=my-web \
+RAILWAY_BACKEND_REF=MyApi \
+RAILWAY_FRONTEND_REF=MyWeb \
+./scripts/railway-set-env.sh
+```
+
+### Optional: cookies for YouTube (CLI)
+
+Railway **rejects any single variable longer than 32,768 characters**. A full browser `cookies.txt` often base64-encodes to more than that — you will see:
+
+`Variable 'YTDLP_COOKIES_BASE64' value exceeds maximum length of 32768`
+
+**Fix:** (1) In the Railway dashboard, **delete** the variable `YTDLP_COOKIES_BASE64` (or discard the pending change) so deploy is unblocked. (2) Upload the file in chunks using the helper script (sets `YTDLP_COOKIES_BASE64_1`, `_2`, … — decoded by `backend/entrypoint.sh`):
+
+```bash
+chmod +x scripts/railway-cookies-chunks.sh
+./scripts/railway-cookies-chunks.sh --delete-single /path/to/cookies.txt
+# Or delete YTDLP_COOKIES_BASE64 manually in the UI, then:
+./scripts/railway-cookies-chunks.sh /path/to/cookies.txt
+```
+
+Override service name if needed: `RAILWAY_BACKEND_SERVICE=Backend ./scripts/railway-cookies-chunks.sh cookies.txt`
+
+If the file is small enough (base64 ≤ 32KB), the script uploads a single `YTDLP_COOKIES_BASE64` instead.
+
+**Manual one-liner** (only when base64 fits):
+
+```bash
+base64 < cookies.txt | tr -d '\n' | railway variable set YTDLP_COOKIES_BASE64 --stdin -s Backend
+```

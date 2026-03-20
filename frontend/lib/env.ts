@@ -17,19 +17,14 @@ function getEnvVar(key: string, fallback?: string): string {
 }
 
 /**
- * Determine the default API base URL based on the current environment.
- * In production (Railway), use the Railway backend domain.
- * In development, use localhost.
+ * Fallback API base when `NEXT_PUBLIC_API_BASE` is unset.
+ * Production builds must set `NEXT_PUBLIC_API_BASE` at build time (Railway Variables → Build).
  */
 function getDefaultApiBase(): string {
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname
-    // If running on Railway or any non-localhost domain, use the backend Railway URL
-    if (host !== 'localhost' && host !== '127.0.0.1') {
-      return 'https://backend-production-46f2d.up.railway.app/api/v1'
-    }
+  if (process.env.NODE_ENV === 'development') {
+    return 'http://localhost:8000/api/v1'
   }
-  return 'http://localhost:8000/api/v1'
+  return ''
 }
 
 /**
