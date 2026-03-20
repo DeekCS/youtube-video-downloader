@@ -19,7 +19,7 @@ environment:
 
   # Anti-throttling
   - YTDLP_THROTTLED_RATE=50K
-  - YTDLP_USE_IOS_CLIENT=true
+  - YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
   - YTDLP_PREFER_FREE_FORMATS=true
 
   # iOS user agent
@@ -73,13 +73,13 @@ YTDLP_STREAM_CHUNK_SIZE=2097152  # 2MB
 
 ## Anti-Throttling Techniques
 
-### 1. iOS Client Impersonation
+### 1. YouTube player client (`tv_embedded`)
 ```yaml
-YTDLP_USE_IOS_CLIENT=true
+YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
 ```
-- **YouTube-specific**: Uses mobile app API endpoints
-- **Why effective**: Mobile clients less throttled than desktop/bots
-- **Alternative**: Try `player_client=android` by editing service code
+- **YouTube-specific**: Sets innertube `player_client` (wired in `yt_dlp_service.py` for both the Python API and CLI).
+- **Why not iOS**: The iOS client requires a [GVS PO token](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide); without it, yt-dlp often reports *only* storyboards and fails with “Requested format is not available”.
+- **Alternatives**: `android`, or leave `YTDLP_YOUTUBE_PLAYER_CLIENT` empty for yt-dlp’s default multi-client flow.
 
 ### 2. Throttling Auto-Bypass
 ```yaml
@@ -138,7 +138,7 @@ YTDLP_SPONSORBLOCK_REMOVE=sponsor,intro,outro
 - YTDLP_CONCURRENT_FRAGMENTS=32
 - YTDLP_HTTP_CHUNK_SIZE=
 - YTDLP_THROTTLED_RATE=50K
-- YTDLP_USE_IOS_CLIENT=true
+- YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
 - YTDLP_COOKIES_FROM_BROWSER=chrome  # If you have Chrome
 ```
 
@@ -146,7 +146,7 @@ YTDLP_SPONSORBLOCK_REMOVE=sponsor,intro,outro
 ```yaml
 - YTDLP_CONCURRENT_FRAGMENTS=16
 - YTDLP_HTTP_CHUNK_SIZE=10M
-- YTDLP_USE_IOS_CLIENT=false
+- YTDLP_YOUTUBE_PLAYER_CLIENT=
 ```
 
 ### For Slow/Throttled Connections
@@ -223,7 +223,7 @@ docker exec -it youtube-video-downloader-backend-1 bash
 
 # Test with current optimizations
 yt-dlp -f 22 --concurrent-fragments 32 --throttled-rate 50K \
-  --extractor-args "youtube:player_client=ios" \
+  --extractor-args "youtube:player_client=tv_embedded" \
   "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
@@ -239,7 +239,8 @@ All env vars available:
 | `YTDLP_SOCKET_TIMEOUT` | 30 | Socket timeout (seconds) |
 | `YTDLP_STREAM_CHUNK_SIZE` | 524288 | Response stream chunks |
 | `YTDLP_THROTTLED_RATE` | 100K | Auto-bypass threshold |
-| `YTDLP_USE_IOS_CLIENT` | false | iOS client impersonation |
+| `YTDLP_YOUTUBE_PLAYER_CLIENT` | tv_embedded | YouTube innertube clients (comma-separated; empty = default) |
+| `YTDLP_USE_IOS_CLIENT` | false | Deprecated (ignored); use `YTDLP_YOUTUBE_PLAYER_CLIENT` |
 | `YTDLP_COOKIES_FROM_BROWSER` | - | Browser for cookies |
 | `YTDLP_USER_AGENT` | - | Custom user agent |
 | `YTDLP_PREFER_FREE_FORMATS` | true | Prefer WebM/MP4 |

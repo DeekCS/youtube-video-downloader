@@ -105,7 +105,14 @@ class Settings(BaseSettings):
     )
     YTDLP_USE_IOS_CLIENT: bool = Field(
         default=False,
-        description="Use iOS player client for YouTube (often less throttled)"
+        description="Deprecated: iOS client requires a PO token; use YTDLP_YOUTUBE_PLAYER_CLIENT instead",
+    )
+    YTDLP_YOUTUBE_PLAYER_CLIENT: str = Field(
+        default="tv_embedded",
+        description=(
+            "Comma-separated YouTube innertube player_client values (tv_embedded works without PO token). "
+            "Set to empty to use yt-dlp's default client selection."
+        ),
     )
     YTDLP_COOKIES_FILE: str | None = Field(
         default=None,

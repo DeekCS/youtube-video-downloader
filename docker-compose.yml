@@ -21,7 +21,9 @@ services:
       - YTDLP_FILE_ACCESS_RETRIES=5
       # Anti-throttling (YouTube workarounds)
       - YTDLP_THROTTLED_RATE=50K
-      - YTDLP_USE_IOS_CLIENT=true
+      # iOS client requires a PO token or yt-dlp reports no formats; tv_embedded is the default in code
+      - YTDLP_USE_IOS_CLIENT=false
+      - YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
       - YTDLP_PREFER_FREE_FORMATS=true
       - YTDLP_USER_AGENT=Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000

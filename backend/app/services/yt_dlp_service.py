@@ -71,6 +71,29 @@ _SIZE_UNITS: dict[str, float] = {
 }
 
 
+def _youtube_player_clients() -> list[str] | None:
+    """Return explicit YouTube player_client list, or None for yt-dlp defaults."""
+    raw = settings.YTDLP_YOUTUBE_PLAYER_CLIENT.strip()
+    if not raw:
+        return None
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _youtube_extractor_args() -> dict[str, Any] | None:
+    clients = _youtube_player_clients()
+    if not clients:
+        return None
+    return {"youtube": {"player_client": clients}}
+
+
+def _append_youtube_extractor_cli(cmd: list[str]) -> None:
+    clients = _youtube_player_clients()
+    if not clients:
+        return
+    inner = ";".join(f"player_client={c}" for c in clients)
+    cmd.extend(["--extractor-args", f"youtube:{inner}"])
+
+
 def _parse_size_bytes(value: str, unit: str) -> int:
     """Convert a size string like '422.93' + 'KiB' to integer bytes."""
     multiplier = _SIZE_UNITS.get(unit, 1)
@@ -379,6 +402,16 @@ class YtDlpService:
         if settings.YTDLP_PROXY:
             ydl_opts["proxy"] = settings.YTDLP_PROXY
 
+        if settings.YTDLP_USE_IOS_CLIENT:
+            logger.warning(
+                "YTDLP_USE_IOS_CLIENT is set but ignored: the iOS client requires a "
+                "GVS PO token or yt-dlp may report no formats. "
+                "Use YTDLP_YOUTUBE_PLAYER_CLIENT (default: tv_embedded)."
+            )
+
+        if (yt_args := _youtube_extractor_args()):
+            ydl_opts["extractor_args"] = yt_args
+
         return ydl_opts
 
     # ------------------------------------------------------------------
@@ -581,6 +614,7 @@ class YtDlpService:
             "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
             "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
         ]
+        _append_youtube_extractor_cli(cmd)
 
         if settings.YTDLP_SLEEP_REQUESTS > 0:
             cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
@@ -688,6 +722,7 @@ class YtDlpService:
             "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
             "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
         ]
+        _append_youtube_extractor_cli(cmd)
 
         if settings.YTDLP_SLEEP_REQUESTS > 0:
             cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
@@ -952,6 +987,8 @@ class YtDlpService:
 
         if progress:
             cmd.extend(["--newline", "--progress"])
+
+        _append_youtube_extractor_cli(cmd)
 
         cmd.append(normalized_url)
         return cmd
