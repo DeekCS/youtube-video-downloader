@@ -256,6 +256,7 @@ Example: `https://frontend-production-xyz789.up.railway.app`
 |---------|----------|
 | `Failed to fetch` … `backboard.railway.com/graphql/v2` … **operation timed out** | Transient network or Railway API slowness. Retry the command (`railway redeploy`, `railway status`, etc.). Turn off VPN or try another network; check [Railway status](https://status.railway.com). If one call times out and the next prints success (e.g. “redeployed”), the action may still have completed—confirm in the dashboard **Deployments**. |
 | CLI works only sometimes | Upgrade: `railway upgrade`. Re-login: `railway login`. |
+| Homebrew: `Could not symlink bin/railway` / `Target ... already exists` | You have **two** CLIs (e.g. `brew install railway` and `npm i -g @railway/cli`). Use one: either `npm uninstall -g @railway/cli` then `brew link --overwrite railway`, or `brew uninstall railway` and keep npm only. Then `which railway` should point to a single install. |
 
 ---
 
