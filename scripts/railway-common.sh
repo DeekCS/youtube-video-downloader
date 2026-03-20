@@ -14,7 +14,12 @@ railway_load_service_slugs() {
     export BACKEND_SLUG FRONTEND_SLUG
     return 0
   fi
-  mapfile -t _rns < <(
+  # No mapfile here: macOS /bin/bash is 3.2 and has no mapfile (bash 4+).
+  local -a _rns
+  _rns=()
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] && _rns+=("$line")
+  done < <(
     command -v railway >/dev/null 2>&1 &&
       railway status --json 2>/dev/null | python3 "$_RAILWAY_SCRIPTS_DIR/railway_resolve_service_names.py" 2>/dev/null ||
       true
