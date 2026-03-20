@@ -136,7 +136,9 @@ NEXT_PUBLIC_API_BASE=https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1
 
 > Replace `Backend` with whatever you named your backend service. This variable is passed as a Docker build arg and baked into the Next.js bundle at build time.
 
-**Build-time requirement:** `NEXT_PUBLIC_*` must be available when Docker runs `pnpm build`. The repo’s `frontend/railway.toml` maps `NEXT_PUBLIC_API_BASE` into `dockerfileArgs` via `${{NEXT_PUBLIC_API_BASE}}`. In Railway, add the variable above and ensure it applies to **Build** (Railway usually does for Docker builds when the variable is referenced in the build).
+**Build-time requirement:** `NEXT_PUBLIC_API_BASE` must be **non-empty** when Docker runs `pnpm build`. The `frontend/Dockerfile` fails the build with a clear error if it is missing. The final image also sets `ENV NEXT_PUBLIC_API_BASE` so the Node server has the same value at **runtime** (fixes “Missing required environment variable: NEXT_PUBLIC_API_BASE” after deploy).
+
+The repo’s `frontend/railway.toml` passes it via `dockerfileArgs = { NEXT_PUBLIC_API_BASE = "${{NEXT_PUBLIC_API_BASE}}" }`. In Railway → Frontend → **Variables**, define `NEXT_PUBLIC_API_BASE` (e.g. `https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1`), then **redeploy** so the frontend **rebuilds**. If the build-arg is empty, the Docker build will fail early—check that the variable exists and is not blank.
 
 **Or set manually:**
 ```env

@@ -19,17 +19,25 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build arguments for environment variables
+# Build arguments for environment variables (must be set for production; see docker-compose / Railway)
 ARG NEXT_PUBLIC_API_BASE
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
 
 RUN npm install -g pnpm
+# Fail fast with a clear error instead of a vague runtime crash
+RUN if [ -z "$NEXT_PUBLIC_API_BASE" ]; then \
+  echo "ERROR: NEXT_PUBLIC_API_BASE build-arg is empty. Set it to your backend URL including /api/v1 (Railway: service variable + dockerfileArgs)."; \
+  exit 1; \
+fi
 RUN pnpm build
 
 # Production image, copy all the files and run next
 FROM base AS runner
 WORKDIR /app
 
+# Same URL at runtime (SSR / server); must repeat ARG in this stage for Docker
+ARG NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE}
 ENV NODE_ENV=production
 
 RUN addgroup --system --gid 1001 nodejs

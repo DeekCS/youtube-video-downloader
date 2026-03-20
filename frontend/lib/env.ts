@@ -1,30 +1,21 @@
 /**
- * Type-safe environment variable access.
- * Validates required environment variables at build/runtime.
+ * Backend API base URL for fetch calls.
+ * Uses static `process.env.NEXT_PUBLIC_API_BASE` so Next.js can inline it in client bundles.
  */
 
-function getEnvVar(key: string, fallback?: string): string {
-  // Handle both server and client-side access
-  const value = process.env[key]
-  if (!value) {
-    if (fallback) {
-      console.warn(`Environment variable ${key} not found, using fallback: ${fallback}`)
-      return fallback
-    }
-    throw new Error(`Missing required environment variable: ${key}`)
+function getApiBase(): string {
+  const v = process.env.NEXT_PUBLIC_API_BASE?.trim()
+  if (v) {
+    return v
   }
-  return value
-}
-
-/**
- * Fallback API base when `NEXT_PUBLIC_API_BASE` is unset.
- * Production builds must set `NEXT_PUBLIC_API_BASE` at build time (Railway Variables → Build).
- */
-function getDefaultApiBase(): string {
   if (process.env.NODE_ENV === 'development') {
     return 'http://localhost:8000/api/v1'
   }
-  return ''
+  throw new Error(
+    'Missing NEXT_PUBLIC_API_BASE. Set it for the frontend Docker build and runtime ' +
+      '(e.g. Railway → Frontend service → Variables → NEXT_PUBLIC_API_BASE = https://<backend>/api/v1), ' +
+      'then redeploy so the image rebuilds.'
+  )
 }
 
 /**
@@ -36,21 +27,19 @@ export const env = {
    * Example: https://api.example.com/api/v1
    */
   get API_BASE(): string {
-    return getEnvVar('NEXT_PUBLIC_API_BASE', getDefaultApiBase())
+    return getApiBase()
   },
 } as const
 
 /**
- * Check if environment is properly configured.
+ * Check environment at startup (layout / build).
  */
 export function validateEnv(): void {
-  // Validate API_BASE format
-  if (!env.API_BASE.startsWith('http')) {
+  const base = getApiBase()
+  if (!base.startsWith('http')) {
     throw new Error('NEXT_PUBLIC_API_BASE must start with http:// or https://')
   }
-
-  // Warn if API_BASE doesn't end with /api/v1
-  if (!env.API_BASE.endsWith('/api/v1')) {
+  if (!base.endsWith('/api/v1')) {
     console.warn(
       'Warning: NEXT_PUBLIC_API_BASE should end with /api/v1 for proper API routing'
     )
