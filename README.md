@@ -154,6 +154,29 @@ uv run ruff check .
 uv run mypy app
 ```
 
+### CLI (`video-dl`)
+
+The backend installs a small CLI that uses the same yt-dlp settings as the API (cookies, player client, etc. from `.env`):
+
+```bash
+cd backend
+
+# List formats (table or JSON)
+uv run video-dl formats "https://www.youtube.com/watch?v=..."
+uv run video-dl formats "URL" --json
+
+# Download: omit -f to choose a format interactively (TTY required)
+uv run video-dl download "URL"
+
+# Non-interactive: set format id (e.g. 18 = typical 360p single-file MP4)
+uv run video-dl download "URL" -f 18 -y
+
+# Output directory (default: ~/Downloads)
+uv run video-dl download "URL" -f 18 -y -o ~/Videos
+```
+
+Files are saved as `{title} [{video_id}].{ext}` under the output directory.
+
 ### Frontend Setup
 
 ```bash

@@ -18,6 +18,15 @@ cp .env.example .env
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+## CLI
+
+```bash
+uv run video-dl formats "https://..."
+uv run video-dl download "https://..." -f 18 -y -o ~/Downloads
+```
+
+See the root `README.md` for details.
+
 ## Development
 
 ```bash
@@ -50,6 +59,7 @@ Once running, visit:
 backend/
 ├── app/
 │   ├── main.py              # Application entry point
+│   ├── cli.py               # video-dl CLI (formats + download)
 │   ├── core/
 │   │   ├── config.py        # Settings and configuration
 │   │   └── logging.py       # Structured logging setup

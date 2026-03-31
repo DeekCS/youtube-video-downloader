@@ -9,7 +9,7 @@ import uuid
 from typing import Any, AsyncIterator
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -123,10 +123,6 @@ async def _stream_file(
     """
     chunk_size = settings.YTDLP_STREAM_CHUNK_SIZE
     try:
-        def _read_chunks() -> bytes:
-            with open(file_path, "rb") as f:
-                return f.read(chunk_size)
-
         with open(file_path, "rb") as f:
             while True:
                 chunk = await asyncio.to_thread(f.read, chunk_size)
@@ -252,12 +248,7 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
         )
 
     # Build filename - keep original title for proper encoding
-    is_merged_format = (
-        "+" in request.format_id
-        or request.format_id in {"best", "bestvideo"}
-        or request.format_id.startswith("best[")
-        or request.format_id.startswith("bestvideo[")
-    )
+    is_merged_format = YtDlpService.is_merged_format(request.format_id)
     if is_merged_format:
         ext = "mp4"
         content_type = "video/mp4"
@@ -304,6 +295,12 @@ async def download_video_post(request: DownloadRequest) -> StreamingResponse:
 # Progress-tracked download endpoints (merged formats)
 # ---------------------------------------------------------------------------
 
+# Deduplication: map (url, format_id) -> existing download_id so that rapid
+# repeated requests for the same format are coalesced into a single task.
+_active_downloads: dict[tuple[str, str], str] = {}
+_active_downloads_lock = threading.Lock()
+
+
 
 @router.post(
     "/download/start",
@@ -319,7 +316,9 @@ async def start_download(request: DownloadRequest) -> dict:
     """Start a merged download with progress tracking.
 
     Returns a ``download_id`` the client uses to poll progress via SSE
-    and ultimately fetch the completed file.
+    and ultimately fetch the completed file.  If an identical download is
+    already in flight, the existing task ID is returned so the client
+    simply re-subscribes to the existing SSE stream.
     """
     # Housekeeping: remove stale tasks
     cleanup_stale()
@@ -341,8 +340,23 @@ async def start_download(request: DownloadRequest) -> dict:
             f"Format '{request.format_id}' not found in available formats"
         )
 
-    task_id = uuid.uuid4().hex[:16]
+    dedup_key = (request.url, request.format_id)
     filename = f"{video_info.title}.mp4"
+
+    # --- Deduplication: return existing task if still active ---
+    with _active_downloads_lock:
+        existing_id = _active_downloads.get(dedup_key)
+        if existing_id:
+            existing_task = get_task(existing_id)
+            if existing_task and existing_task.status not in ("completed", "failed"):
+                logger.info(
+                    f"Reusing existing download task {existing_id} for {dedup_key[1]}"
+                )
+                return {"download_id": existing_id, "filename": existing_task.filename}
+        # No live task — create a new one
+        task_id = uuid.uuid4().hex[:16]
+        _active_downloads[dedup_key] = task_id
+
     task = create_task(task_id, filename=filename, content_type="video/mp4")
 
     def _run() -> None:
@@ -353,6 +367,11 @@ async def start_download(request: DownloadRequest) -> dict:
         except Exception as exc:
             task.status = "failed"
             task.error = str(exc)
+        finally:
+            # Release the deduplication slot once the download is finished
+            with _active_downloads_lock:
+                if _active_downloads.get(dedup_key) == task_id:
+                    del _active_downloads[dedup_key]
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
@@ -365,7 +384,9 @@ async def start_download(request: DownloadRequest) -> dict:
     summary="Stream download progress via SSE",
     description="Server-Sent Events stream with real-time download progress",
 )
-async def download_progress(download_id: str) -> EventSourceResponse:
+async def download_progress(
+    download_id: str, request: Request
+) -> EventSourceResponse:
     """SSE endpoint streaming progress events for a download task."""
     task = get_task(download_id)
     if not task:
@@ -373,6 +394,11 @@ async def download_progress(download_id: str) -> EventSourceResponse:
 
     async def _event_generator():
         while True:
+            # Stop early if the client disconnected to avoid zombie generators
+            if await request.is_disconnected():
+                logger.debug(f"SSE client disconnected for task {download_id}")
+                break
+
             t = get_task(download_id)
             if not t:
                 break

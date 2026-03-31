@@ -133,28 +133,41 @@ export async function downloadVideo(
   formatId: string,
   filename: string
 ): Promise<void> {
-  try {
-    // Use GET endpoint for better browser download handling
-    // This allows the browser to show native download progress
-    const downloadUrl = buildDownloadUrl(url, formatId)
+  // Build the GET URL and trigger a browser-native download
+  const downloadUrl = buildDownloadUrl(url, formatId)
 
-    // Create a hidden link and click it to trigger download
-    const link = document.createElement('a')
-    link.href = downloadUrl
-    link.style.display = 'none'
-    document.body.appendChild(link)
-    link.click()
+  const link = document.createElement('a')
+  link.href = downloadUrl
+  link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  setTimeout(() => document.body.removeChild(link), 200)
 
-    // Small delay before cleanup to ensure download starts
-    setTimeout(() => {
-      document.body.removeChild(link)
-    }, 100)
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new ApiError('INTERNAL_ERROR', error.message)
+  // Return a promise that resolves when the tab regains focus (the user
+  // returned from the browser's "Save As" or download shelf) or after a
+  // 45-second safety timeout.  This lets callers display a meaningful
+  // "browser is downloading…" message rather than clearing state immediately.
+  return new Promise<void>((resolve) => {
+    const TIMEOUT_MS = 45_000
+    let settled = false
+
+    const finish = () => {
+      if (settled) return
+      settled = true
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+      resolve()
     }
-    throw new ApiError('INTERNAL_ERROR', 'Download failed')
-  }
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') finish()
+    }
+
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    setTimeout(finish, TIMEOUT_MS)
+  })
 }
 
 /**
@@ -208,26 +221,57 @@ export function subscribeToProgress(
   onError?: (error: Error) => void
 ): () => void {
   const url = `${env.API_BASE}/videos/download/${downloadId}/progress`
-  const eventSource = new EventSource(url)
 
-  eventSource.addEventListener('progress', (event: MessageEvent) => {
-    try {
-      const progress: DownloadProgress = JSON.parse(event.data)
-      onProgress(progress)
-      if (progress.status === 'completed' || progress.status === 'failed') {
-        eventSource.close()
-      }
-    } catch {
-      // ignore parse errors
-    }
-  })
+  let eventSource: EventSource | null = null
+  let retryCount = 0
+  const MAX_RETRIES = 3
+  const RETRY_DELAYS = [1000, 2000, 4000]
+  let closed = false
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-  eventSource.onerror = () => {
-    eventSource.close()
-    onError?.(new Error('Progress connection lost'))
+  const cleanup = () => {
+    closed = true
+    if (retryTimer !== null) clearTimeout(retryTimer)
+    eventSource?.close()
   }
 
-  return () => eventSource.close()
+  const connect = () => {
+    if (closed) return
+    eventSource = new EventSource(url)
+
+    eventSource.addEventListener('progress', (event: MessageEvent) => {
+      try {
+        const progress: DownloadProgress = JSON.parse(event.data)
+        retryCount = 0 // reset on successful message
+        onProgress(progress)
+        if (progress.status === 'completed' || progress.status === 'failed') {
+          cleanup()
+        }
+      } catch {
+        // ignore parse errors
+      }
+    })
+
+    eventSource.onerror = () => {
+      eventSource?.close()
+      eventSource = null
+
+      if (closed) return
+
+      if (retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAYS[retryCount] ?? 4000
+        retryCount++
+        retryTimer = setTimeout(connect, delay)
+      } else {
+        // Exhausted retries — propagate error
+        cleanup()
+        onError?.(new Error('Progress connection lost'))
+      }
+    }
+  }
+
+  connect()
+  return cleanup
 }
 
 /**

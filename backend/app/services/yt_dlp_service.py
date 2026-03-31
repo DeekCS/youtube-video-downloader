@@ -437,10 +437,14 @@ class YtDlpService:
         all_formats = merged_formats + formats
         cls._sort_formats(all_formats)
 
+        vid = info.get("id")
+        video_id = str(vid) if vid is not None else None
+
         return VideoInfo(
             title=title,
             thumbnail_url=thumbnail,
             duration_seconds=duration,
+            video_id=video_id,
             formats=all_formats,
         )
 
@@ -500,6 +504,152 @@ class YtDlpService:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def is_merged_format(format_id: str) -> bool:
+        """Return True when *format_id* selects video+audio merge (ffmpeg)."""
+        return (
+            "+" in format_id
+            or format_id in {"best", "bestvideo"}
+            or format_id.startswith("best[")
+            or format_id.startswith("bestvideo[")
+        )
+
+    @classmethod
+    def _build_merged_download_cmd(
+        cls,
+        normalized_url: str,
+        format_id: str,
+        output_template: str,
+    ) -> list[str]:
+        """Build yt-dlp argv for a merged (multi-stream) download to disk."""
+        cmd: list[str] = [
+            "yt-dlp",
+            "-f", format_id,
+            "-o", output_template,
+            "--merge-output-format", "mp4",
+            "--no-part",
+            "--no-warnings",
+            "--quiet",
+            "--no-playlist",
+            "--remote-components", "ejs:github",
+            "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
+            "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
+            "--buffer-size", settings.YTDLP_BUFFER_SIZE,
+            "--socket-timeout", str(settings.YTDLP_SOCKET_TIMEOUT),
+            "--retries", str(settings.YTDLP_RETRIES),
+            "--fragment-retries", str(settings.YTDLP_FRAGMENT_RETRIES),
+            "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
+            "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
+        ]
+        _append_youtube_extractor_cli(cmd)
+
+        if settings.YTDLP_SLEEP_REQUESTS > 0:
+            cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
+        if settings.YTDLP_USER_AGENT:
+            cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
+        if settings.YTDLP_HTTP_CHUNK_SIZE:
+            cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
+        if settings.YTDLP_SPONSORBLOCK_REMOVE:
+            cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
+        if settings.YTDLP_COOKIES_FILE:
+            cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
+            cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
+        if settings.YTDLP_PROXY:
+            cmd.extend(["--proxy", settings.YTDLP_PROXY])
+
+        cmd.append(normalized_url)
+        return cmd
+
+    @classmethod
+    def download_to_directory(
+        cls,
+        url: str,
+        format_id: str,
+        output_dir: str,
+        *,
+        video_info: VideoInfo | None = None,
+    ) -> str:
+        """Download *format_id* to *output_dir* and return the final file path.
+
+        Uses a temporary directory for yt-dlp output, then moves the file to
+        ``{sanitized_title} [{video_id}].{ext}`` under *output_dir*.
+        """
+        if not FORMAT_ID_PATTERN.match(format_id):
+            raise InvalidUrlError("Invalid format_id")
+
+        info = video_info if video_info is not None else cls.fetch_formats(url)
+        normalized_url = cls.normalize_url(url)
+        safe_url = cls._sanitize_url_for_logging(normalized_url)
+
+        out_abs = os.path.abspath(os.path.expanduser(output_dir))
+        os.makedirs(out_abs, exist_ok=True)
+
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_cli_")
+        dl_id = uuid.uuid4().hex[:12]
+        work_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
+
+        if cls.is_merged_format(format_id):
+            cmd = cls._build_merged_download_cmd(
+                normalized_url, format_id, work_template,
+            )
+        else:
+            cmd = cls.build_download_command(
+                url=url,
+                format_id=format_id,
+                progress=False,
+                output_file=work_template,
+            )
+
+        logger.info(
+            f"CLI-style download to directory for format {format_id} from {safe_url}"
+        )
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=3600,
+            )
+        except subprocess.TimeoutExpired:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise YtdlpFailedError("Download timed out (1-hour limit)")
+
+        if result.returncode != 0:
+            stderr_text = result.stderr.decode(errors="replace")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.error(
+                f"Download failed ({result.returncode}) for {safe_url}: "
+                f"{stderr_text[:500]}"
+            )
+            raise YtdlpFailedError(f"Download failed: {stderr_text[:400]}")
+
+        files = [f for f in os.listdir(temp_dir) if not f.startswith(".")]
+        if not files:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise YtdlpFailedError("Download produced no output file")
+
+        paths = [os.path.join(temp_dir, f) for f in files]
+        actual_path = max(paths, key=os.path.getsize)
+        ext = os.path.splitext(actual_path)[1] or ".mp4"
+        vid = info.video_id or "video"
+        base = cls._sanitize_cli_filename(info.title)
+        final_name = f"{base} [{vid}]{ext}"
+        final_path = os.path.join(out_abs, final_name)
+        if os.path.exists(final_path):
+            os.remove(final_path)
+        shutil.move(actual_path, final_path)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.info(f"Saved download to {final_path}")
+        return final_path
+
+    @staticmethod
+    def _sanitize_cli_filename(title: str) -> str:
+        """Strip path separators and control chars; keep Unicode for local paths."""
+        s = title.strip() or "video"
+        s = re.sub(r'[/\\:\x00-\x1f\x7f]', "", s)
+        return s[:200] if len(s) > 200 else s
 
     @classmethod
     def fetch_formats(cls, url: str) -> VideoInfo:
@@ -593,45 +743,9 @@ class YtDlpService:
         dl_id = uuid.uuid4().hex[:12]
         output_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
 
-        cmd: list[str] = [
-            "yt-dlp",
-            "-f", format_id,
-            "-o", output_template,
-            "--merge-output-format", "mp4",
-            # yt-dlp already adds  -c copy -movflags +faststart  when
-            # merging to a file, so no --ppa needed.
-            "--no-part",
-            "--no-warnings",
-            "--quiet",
-            "--no-playlist",
-            "--remote-components", "ejs:github",
-            "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
-            "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
-            "--buffer-size", settings.YTDLP_BUFFER_SIZE,
-            "--socket-timeout", str(settings.YTDLP_SOCKET_TIMEOUT),
-            "--retries", str(settings.YTDLP_RETRIES),
-            "--fragment-retries", str(settings.YTDLP_FRAGMENT_RETRIES),
-            "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
-            "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
-        ]
-        _append_youtube_extractor_cli(cmd)
-
-        if settings.YTDLP_SLEEP_REQUESTS > 0:
-            cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
-        if settings.YTDLP_USER_AGENT:
-            cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
-        if settings.YTDLP_HTTP_CHUNK_SIZE:
-            cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
-        if settings.YTDLP_SPONSORBLOCK_REMOVE:
-            cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
-        if settings.YTDLP_COOKIES_FILE:
-            cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
-        elif settings.YTDLP_COOKIES_FROM_BROWSER:
-            cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
-        if settings.YTDLP_PROXY:
-            cmd.extend(["--proxy", settings.YTDLP_PROXY])
-
-        cmd.append(normalized_url)
+        cmd = cls._build_merged_download_cmd(
+            normalized_url, format_id, output_template,
+        )
 
         logger.info(
             f"Starting merged file download for format {format_id} from {safe_url}"
@@ -860,7 +974,8 @@ class YtDlpService:
             )
             return
 
-        # Find output file
+        # Find output file — pick the largest to avoid accidentally selecting
+        # a leftover .part file, thumbnail, or subtitle sidecar.
         files = [f for f in os.listdir(temp_dir) if not f.startswith(".")]
         if not files:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -868,7 +983,8 @@ class YtDlpService:
             task.error = "Download produced no output"
             return
 
-        actual_path = os.path.join(temp_dir, files[0])
+        paths = [os.path.join(temp_dir, f) for f in files]
+        actual_path = max(paths, key=os.path.getsize)
         task.file_path = actual_path
         task.temp_dir = temp_dir
         task.file_size = os.path.getsize(actual_path)
@@ -926,12 +1042,21 @@ class YtDlpService:
 
     @classmethod
     def build_download_command(
-        cls, url: str, format_id: str, progress: bool = False,
+        cls,
+        url: str,
+        format_id: str,
+        progress: bool = False,
+        *,
+        output_file: str | None = None,
     ) -> list[str]:
-        """Build a yt-dlp command that streams a single format to stdout.
+        """Build a yt-dlp command for a single-stream format.
 
-        For merged formats (video+audio), use ``download_merged_to_file``
-        instead — piping merged output to stdout produces MPEG-TS, not MP4.
+        With *output_file* ``None``, streams to stdout (``-o -``). Otherwise
+        writes to *output_file*.
+
+        For merged formats (video+audio), use ``download_merged_to_file`` or
+        ``_build_merged_download_cmd`` — piping merged output to stdout
+        produces MPEG-TS, not MP4.
         """
         normalized_url = cls.normalize_url(url)
 
@@ -940,8 +1065,12 @@ class YtDlpService:
         cmd: list[str] = [
             "yt-dlp",
             "-f", format_spec,
-            "-o", "-",  # Output to stdout
-            "-c",       # Continue/resume interrupted downloads
+        ]
+        if output_file is None:
+            cmd.extend(["-o", "-", "-c"])
+        else:
+            cmd.extend(["-o", output_file, "-c"])
+        cmd.extend([
             "--no-warnings",
             "--quiet",
             "--no-playlist",
@@ -954,7 +1083,7 @@ class YtDlpService:
             "--fragment-retries", str(settings.YTDLP_FRAGMENT_RETRIES),
             "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
             "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
-        ]
+        ])
 
         # Network optimizations
         if settings.YTDLP_SLEEP_REQUESTS > 0:

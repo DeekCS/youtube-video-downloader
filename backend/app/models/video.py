@@ -112,6 +112,10 @@ class VideoInfo(BaseModel):
         description="Video duration in seconds",
         ge=0,
     )
+    video_id: str | None = Field(
+        default=None,
+        description="Platform-specific video identifier when available (e.g. YouTube id)",
+    )
     formats: list[Format] = Field(
         ...,
         description="List of available formats",

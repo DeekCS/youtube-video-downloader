@@ -114,6 +114,8 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
   }, [])
   // Track SSE cleanup functions so we can close on unmount
   const cleanupFns = useRef<Record<string, () => void>>({})
+  // Guard against double-submitting the same format
+  const activeDownloads = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     return () => {
@@ -132,22 +134,33 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
   // Human-readable status label
   const getStatusLabel = useCallback((p: DownloadProgress): string => {
     if (p.status === 'failed') return p.error || 'Download failed'
-    if (p.status === 'completed') return 'Complete — saving…'
+    if (p.status === 'completed') return 'Saved ✓'
     if (p.status === 'merging') return 'Merging streams…'
     if (p.status === 'downloading') {
       if (p.phase === 'video') return 'Downloading video…'
       if (p.phase === 'audio') return 'Downloading audio…'
-      return 'Downloading…'
+      return 'Downloading… (check browser)'
     }
     return 'Preparing…'
   }, [])
 
+
   /** Start a progress-tracked merged download. */
   const handleMergedDownload = async (formatId: string) => {
+    // Prevent double-submit
+    if (activeDownloads.current.has(formatId)) return
+    activeDownloads.current.add(formatId)
+
+    // Cancel any stale SSE connection for this format
+    cleanupFns.current[formatId]?.()
+    delete cleanupFns.current[formatId]
+
     setDlStates((s) => ({
       ...s,
       [formatId]: { status: 'pending', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, downloading: true },
     }))
+
+    const release = () => activeDownloads.current.delete(formatId)
 
     try {
       const { downloadId } = await startDownload(originalUrl, formatId)
@@ -164,6 +177,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
             link.style.display = 'none'
             document.body.appendChild(link)
             link.click()
+            // Show 'Saved ✓' for 3 s, then clear
             setTimeout(() => {
               document.body.removeChild(link)
               setDlStates((s) => {
@@ -171,7 +185,8 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
                 delete next[formatId]
                 return next
               })
-            }, 2500)
+              release()
+            }, 3000)
           }
 
           if (progress.status === 'failed') {
@@ -181,11 +196,12 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
                 delete next[formatId]
                 return next
               })
+              release()
             }, 5000)
           }
         },
         () => {
-          // SSE connection error
+          // SSE connection error (after retries exhausted)
           setDlStates((s) => ({
             ...s,
             [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Connection lost', downloading: true },
@@ -196,6 +212,7 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
               delete next[formatId]
               return next
             })
+            release()
           }, 5000)
         },
       )
@@ -212,38 +229,37 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
           delete next[formatId]
           return next
         })
+        release()
       }, 5000)
     }
   }
 
   /** Direct GET link for single-stream formats (browser handles progress). */
   const handleDirectDownload = async (formatId: string, filename: string) => {
+    // Prevent double-submit
+    if (activeDownloads.current.has(formatId)) return
+    activeDownloads.current.add(formatId)
+
     setDlStates((s) => ({
       ...s,
       [formatId]: { status: 'downloading', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, downloading: true },
     }))
 
+
+    const release = () => activeDownloads.current.delete(formatId)
+
     try {
+      // downloadVideo resolves when the tab regains focus or after 45 s
       await downloadVideo(originalUrl, formatId, filename)
-      setTimeout(() => {
-        setDlStates((s) => {
-          const next = { ...s }
-          delete next[formatId]
-          return next
-        })
-      }, 2000)
     } catch {
-      setDlStates((s) => ({
-        ...s,
-        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Download failed', downloading: true },
-      }))
-      setTimeout(() => {
-        setDlStates((s) => {
-          const next = { ...s }
-          delete next[formatId]
-          return next
-        })
-      }, 5000)
+      // ignore — browser download errors are invisible to JS
+    } finally {
+      setDlStates((s) => {
+        const next = { ...s }
+        delete next[formatId]
+        return next
+      })
+      release()
     }
   }
 
