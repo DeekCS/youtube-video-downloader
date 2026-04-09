@@ -6,15 +6,16 @@ import re
 import shutil
 import threading
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.rate_limit import limiter
 from app.models.video import DownloadRequest, FormatsRequest, VideoInfo
 from app.services.download_tasks import (
     cleanup_stale,
@@ -43,10 +44,12 @@ router = APIRouter()
         400: {"description": "Invalid URL"},
         404: {"description": "Video not found"},
         422: {"description": "Unsupported platform"},
+        429: {"description": "Rate limit exceeded"},
         502: {"description": "yt-dlp failed to process the video"},
     },
 )
-async def fetch_formats(request: FormatsRequest) -> VideoInfo:
+@limiter.limit("10/minute")
+async def fetch_formats(request: Request, body: FormatsRequest) -> VideoInfo:
     """Fetch available formats for a video URL.
 
     Args:
@@ -59,7 +62,7 @@ async def fetch_formats(request: FormatsRequest) -> VideoInfo:
         Various VideoDownloaderError exceptions (handled by global handler)
     """
     # Run blocking yt-dlp call in a thread to avoid blocking the event loop
-    video_info = await asyncio.to_thread(YtDlpService.fetch_formats, request.url)
+    video_info = await asyncio.to_thread(YtDlpService.fetch_formats, body.url)
     return video_info
 
 
@@ -133,166 +136,9 @@ async def _stream_file(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-async def _stream_download(
-    url: str,
-    format_id: str,
-    filename: str,
-) -> AsyncIterator[bytes]:
-    """Stream video download from yt-dlp subprocess.
-
-    Args:
-        url: Video URL
-        format_id: Format ID to download
-        filename: Base filename for logging
-
-    Yields:
-        Chunks of video data
-    """
-    chunk_size = settings.YTDLP_STREAM_CHUNK_SIZE
-
-    process = YtDlpService.download_format(url, format_id)
-
-    stderr_buffer = bytearray()
-    stderr_limit = 64 * 1024  # keep last ~64KB for error logs
-    stderr_stop = threading.Event()
-
-    def _drain_stderr_blocking() -> None:
-        if process.stderr is None:
-            return
-        try:
-            while not stderr_stop.is_set():
-                data = process.stderr.read(4096)
-                if not data:
-                    break
-                if len(stderr_buffer) < stderr_limit:
-                    remaining = stderr_limit - len(stderr_buffer)
-                    stderr_buffer.extend(data[:remaining])
-        except Exception:
-            # Best-effort; stderr draining is non-critical
-            return
-
-    stderr_thread = threading.Thread(target=_drain_stderr_blocking, daemon=True)
-    stderr_thread.start()
-
-    try:
-        while True:
-            if process.stdout is None:
-                break
-
-            chunk = await asyncio.to_thread(process.stdout.read, chunk_size)
-            if not chunk:
-                break
-            yield chunk
-
-        return_code = await asyncio.to_thread(process.wait)
-
-        if return_code != 0:
-            stderr_text = stderr_buffer.decode(errors="replace")
-            logger.error(
-                f"yt-dlp download failed ({return_code}) for {filename}: {stderr_text}"
-            )
-
-    except Exception as e:
-        logger.error(f"Error during download stream: {e}")
-        # Terminate the process if still running
-        if process.poll() is None:
-            process.terminate()
-            await asyncio.to_thread(process.wait)
-        raise
-
-    finally:
-        # Ensure cleanup
-        stderr_stop.set()
-        if process.poll() is None:
-            process.terminate()
-            await asyncio.to_thread(process.wait)
-        # Give the stderr drainer a moment to exit
-        stderr_thread.join(timeout=0.5)
-
-
-@router.post(
-    "/download",
-    summary="Download video (POST)",
-    description="Download a video in the specified format (POST method)",
-    responses={
-        200: {"description": "Video file stream"},
-        400: {"description": "Invalid request"},
-        404: {"description": "Video or format not found"},
-        502: {"description": "Download failed"},
-    },
-)
-async def download_video_post(request: DownloadRequest) -> StreamingResponse:
-    """Download a video in the specified format.
-
-    Args:
-        request: Download request with URL and format ID
-
-    Returns:
-        Streaming response with video file
-    """
-    # Prefer cached info from /formats to reduce slow-start latency
-    video_info = YtDlpService.get_cached_formats(request.url)
-    if video_info is None:
-        video_info = await asyncio.to_thread(YtDlpService.fetch_formats, request.url)
-
-    # Find the requested format
-    selected_format = next(
-        (fmt for fmt in video_info.formats if fmt.id == request.format_id),
-        None,
-    )
-
-    if not selected_format:
-        from app.services.errors import FormatNotAvailableError
-        raise FormatNotAvailableError(
-            f"Format '{request.format_id}' not found in available formats"
-        )
-
-    # Build filename - keep original title for proper encoding
-    is_merged_format = YtDlpService.is_merged_format(request.format_id)
-    if is_merged_format:
-        ext = "mp4"
-        content_type = "video/mp4"
-    else:
-        ext = selected_format.mime_type.split("/")[-1]
-        content_type = selected_format.mime_type or "application/octet-stream"
-    filename = f"{video_info.title}.{ext}"
-
-    logger.info(f"Streaming download: {filename} ({request.format_id})")
-
-    if is_merged_format:
-        # Merged formats: download to temp file first, then stream.
-        # yt-dlp/ffmpeg can't pipe proper MP4 to stdout (falls back to
-        # MPEG-TS).  Temp-file lets ffmpeg write real MP4 with faststart.
-        file_path, temp_dir = await asyncio.to_thread(
-            YtDlpService.download_merged_to_file,
-            request.url,
-            request.format_id,
-        )
-        file_size = os.path.getsize(file_path)
-
-        return StreamingResponse(
-            _stream_file(file_path, temp_dir),
-            media_type=content_type,
-            headers={
-                "Content-Disposition": _build_content_disposition(filename),
-                "Content-Length": str(file_size),
-                "X-Format-ID": request.format_id,
-            },
-        )
-
-    # Single-stream formats: pipe directly from yt-dlp stdout.
-    return StreamingResponse(
-        _stream_download(request.url, request.format_id, filename),
-        media_type=content_type,
-        headers={
-            "Content-Disposition": _build_content_disposition(filename),
-            "X-Format-ID": request.format_id,
-        },
-    )
-
 
 # ---------------------------------------------------------------------------
-# Progress-tracked download endpoints (merged formats)
+# Progress-tracked download endpoints (all formats)
 # ---------------------------------------------------------------------------
 
 # Deduplication: map (url, format_id) -> existing download_id so that rapid
@@ -301,47 +147,62 @@ _active_downloads: dict[tuple[str, str], str] = {}
 _active_downloads_lock = threading.Lock()
 
 
-
 @router.post(
     "/download/start",
     summary="Start a download with progress tracking",
-    description="Starts a merged download in the background and returns a download ID for progress tracking",
+    description="Starts a download in the background (merged or single-stream) and returns a download ID for progress tracking",
     responses={
         200: {"description": "Download started"},
         400: {"description": "Invalid request"},
         404: {"description": "Format not found"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
-async def start_download(request: DownloadRequest) -> dict:
-    """Start a merged download with progress tracking.
+@limiter.limit("5/minute")
+async def start_download(request: Request, body: DownloadRequest) -> dict:
+    """Start a download with progress tracking.
 
     Returns a ``download_id`` the client uses to poll progress via SSE
     and ultimately fetch the completed file.  If an identical download is
     already in flight, the existing task ID is returned so the client
     simply re-subscribes to the existing SSE stream.
+
+    Handles **all** formats (merged and single-stream).  By downloading
+    to server disk first, the browser receives the file over a fast
+    local transfer instead of being exposed to YouTube throttling.
     """
     # Housekeeping: remove stale tasks
     cleanup_stale()
 
-    video_info = YtDlpService.get_cached_formats(request.url)
+    video_info = YtDlpService.get_cached_formats(body.url)
     if video_info is None:
         video_info = await asyncio.to_thread(
-            YtDlpService.fetch_formats, request.url
+            YtDlpService.fetch_formats, body.url
         )
 
     selected_format = next(
-        (fmt for fmt in video_info.formats if fmt.id == request.format_id),
+        (fmt for fmt in video_info.formats if fmt.id == body.format_id),
         None,
     )
     if not selected_format:
         from app.services.errors import FormatNotAvailableError
 
         raise FormatNotAvailableError(
-            f"Format '{request.format_id}' not found in available formats"
+            f"Format '{body.format_id}' not found in available formats"
         )
 
-    dedup_key = (request.url, request.format_id)
-    filename = f"{video_info.title}.mp4"
+    dedup_key = (body.url, body.format_id)
+    is_merged = YtDlpService.is_merged_format(body.format_id)
+
+    # Determine filename and content type based on format type
+    if is_merged:
+        ext = "mp4"
+        content_type = "video/mp4"
+    else:
+        ext = selected_format.mime_type.split("/")[-1]
+        content_type = selected_format.mime_type or "application/octet-stream"
+
+    filename = f"{video_info.title}.{ext}"
 
     # --- Deduplication: return existing task if still active ---
     with _active_downloads_lock:
@@ -357,13 +218,18 @@ async def start_download(request: DownloadRequest) -> dict:
         task_id = uuid.uuid4().hex[:16]
         _active_downloads[dedup_key] = task_id
 
-    task = create_task(task_id, filename=filename, content_type="video/mp4")
+    task = create_task(task_id, filename=filename, content_type=content_type)
 
     def _run() -> None:
         try:
-            YtDlpService.download_merged_with_progress(
-                request.url, request.format_id, task
-            )
+            if is_merged:
+                YtDlpService.download_merged_with_progress(
+                    body.url, body.format_id, task
+                )
+            else:
+                YtDlpService.download_single_with_progress(
+                    body.url, body.format_id, task
+                )
         except Exception as exc:
             task.status = "failed"
             task.error = str(exc)
@@ -394,7 +260,6 @@ async def download_progress(
 
     async def _event_generator():
         while True:
-            # Stop early if the client disconnected to avoid zombie generators
             if await request.is_disconnected():
                 logger.debug(f"SSE client disconnected for task {download_id}")
                 break
@@ -470,41 +335,3 @@ async def download_file(download_id: str) -> StreamingResponse:
             "Content-Length": str(file_size),
         },
     )
-
-
-# ---------------------------------------------------------------------------
-# Legacy download endpoints (direct pipe / non-progress)
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/download",
-    summary="Download video (GET)",
-    description="Download a video in the specified format (GET method for browser navigation)",
-    responses={
-        200: {"description": "Video file stream"},
-        400: {"description": "Invalid request"},
-        404: {"description": "Video or format not found"},
-        502: {"description": "Download failed"},
-    },
-)
-async def download_video_get(
-    url: str = Query(..., description="Video URL", min_length=10, max_length=2048),
-    format_id: str = Query(..., description="Format ID from formats list", min_length=1, max_length=500),
-) -> StreamingResponse:
-    """Download a video via GET request (for browser navigation).
-
-    Args:
-        url: Video URL
-        format_id: Format ID to download
-
-    Returns:
-        Streaming response with video file
-    """
-    # Reuse the POST endpoint logic
-    request = DownloadRequest(url=url, format_id=format_id)
-    return await download_video_post(request)
-
-
-
-

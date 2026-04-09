@@ -1,5 +1,5 @@
 """Test configuration and fixtures."""
-from typing import Generator
+from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient

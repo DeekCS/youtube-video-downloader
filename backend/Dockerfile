@@ -11,9 +11,11 @@ RUN apt-get update && apt-get install -y \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install deno (JS runtime required by yt-dlp for YouTube n-challenge solving)
-RUN curl -fsSL https://deno.land/install.sh | sh \
-    && ln -s /root/.deno/bin/deno /usr/local/bin/deno
+# Install deno system-wide (non-root-friendly path; required by yt-dlp for YouTube)
+ENV DENO_INSTALL=/usr/local/deno
+RUN mkdir -p "$DENO_INSTALL" \
+    && curl -fsSL https://deno.land/install.sh | sh \
+    && ln -sf "$DENO_INSTALL/bin/deno" /usr/local/bin/deno
 
 # Install uv for faster dependency management
 RUN pip install --no-cache-dir uv
@@ -37,6 +39,12 @@ COPY app ./app
 # Copy entrypoint script (decodes cookies from env var)
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# Non-root runtime (entrypoint still writes cookies under /app when configured)
+RUN groupadd --system appuser \
+    && useradd --system --gid appuser --uid 1000 --home-dir /app --no-create-home appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 
 # Expose port (Railway injects PORT env var)
 EXPOSE 8000

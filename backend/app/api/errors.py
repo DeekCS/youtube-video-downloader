@@ -5,12 +5,7 @@ from fastapi.responses import JSONResponse
 from app.core.logging import get_logger
 from app.models.video import ErrorResponse
 from app.services.errors import (
-    FormatNotAvailableError,
-    InvalidUrlError,
-    UnsupportedPlatformError,
     VideoDownloaderError,
-    VideoNotFoundError,
-    YtdlpFailedError,
 )
 
 logger = get_logger(__name__)

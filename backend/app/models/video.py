@@ -1,7 +1,7 @@
 """Pydantic models for video-related API contracts."""
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FormatsRequest(BaseModel):
@@ -81,9 +81,8 @@ class Format(BaseModel):
         description="True if this format contains only video (no audio)",
     )
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "id": "22",
                 "quality_label": "720p",
@@ -93,6 +92,7 @@ class Format(BaseModel):
                 "is_video_only": False,
             }
         }
+    )
 
 
 class VideoInfo(BaseModel):
@@ -122,9 +122,8 @@ class VideoInfo(BaseModel):
         min_length=1,
     )
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "title": "Example Video Title",
                 "thumbnail_url": "https://example.com/thumb.jpg",
@@ -141,6 +140,7 @@ class VideoInfo(BaseModel):
                 ],
             }
         }
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -163,14 +163,14 @@ class ErrorResponse(BaseModel):
         min_length=1,
     )
 
-    class Config:
-        """Pydantic config."""
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "code": "INVALID_URL",
                 "message": "The provided URL is invalid or blocked",
             }
         }
+    )
 
 
 class HealthResponse(BaseModel):
@@ -183,4 +183,16 @@ class HealthResponse(BaseModel):
     version: str = Field(
         default="0.1.0",
         description="API version",
+    )
+    ffmpeg_ok: bool = Field(
+        default=True,
+        description="Whether the ffmpeg binary is available on PATH",
+    )
+    yt_dlp_cli_ok: bool = Field(
+        default=True,
+        description="Whether the yt-dlp CLI responds to --version",
+    )
+    yt_dlp_version: str | None = Field(
+        default=None,
+        description="Reported yt-dlp CLI version string, if available",
     )

@@ -27,6 +27,7 @@ MANIFEST
 htmlcov/
 *.cover
 venv/
+.venv/
 env/
 ENV/
 

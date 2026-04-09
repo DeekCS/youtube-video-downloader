@@ -193,11 +193,11 @@ class TestMergedFormatSelectors:
         merged = YtDlpService._create_merged_formats(formats)
 
         labels = [f.quality_label for f in merged]
-        assert any("Best Available" in l for l in labels)
-        assert any("1080" in l for l in labels)
-        assert any("720" in l for l in labels)
+        assert any("Best Available" in label for label in labels)
+        assert any("1080" in label for label in labels)
+        assert any("720" in label for label in labels)
         # 480p is not available in sample, so no 480 tier
-        assert not any("480" in l for l in labels)
+        assert not any("480" in label for label in labels)
 
     def test_merged_formats_all_mp4_mime(self) -> None:
         """All merged formats must have video/mp4 mime type."""

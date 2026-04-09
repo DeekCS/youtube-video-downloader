@@ -1,15 +1,21 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Downloader } from '@/components/video/downloader'
 import { AlertTriangle } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-gradient-to-b from-background to-muted/20">
+    <main className="min-h-screen bg-gradient-to-b from-background to-muted/20" role="main">
       <div className="container max-w-5xl mx-auto py-6 sm:py-12 px-4">
         {/* Header */}
-        <div className="text-center mb-6 sm:mb-12">
-          <h1 className="text-2xl sm:text-4xl font-bold tracking-tight mb-1 sm:mb-2">Video Downloader</h1>
+        <div className="relative text-center mb-6 sm:mb-12">
+          <div className="absolute right-0 top-0">
+            <ThemeToggle />
+          </div>
+          <h1 className="text-2xl sm:text-4xl font-bold tracking-tight mb-1 sm:mb-2">
+            Video Downloader
+          </h1>
           <p className="text-sm sm:text-base text-muted-foreground">
             Download videos from YouTube and other platforms
           </p>

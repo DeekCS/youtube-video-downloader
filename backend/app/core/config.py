@@ -1,5 +1,4 @@
 """Application configuration using pydantic-settings."""
-import os
 from typing import Literal
 
 from pydantic import Field, field_validator

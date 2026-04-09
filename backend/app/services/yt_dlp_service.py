@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import threading
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -18,6 +19,7 @@ from cachetools import TTLCache
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.video import Format, VideoInfo
+from app.services.download_tasks import DownloadTask
 from app.services.errors import (
     FormatNotAvailableError,
     InvalidUrlError,
@@ -25,82 +27,32 @@ from app.services.errors import (
     VideoNotFoundError,
     YtdlpFailedError,
 )
+from app.services.ytdlp.constants import (
+    BLOCKED_HOSTNAMES,
+    CODEC_NONE,
+    CODEC_UNKNOWN,
+    DESTINATION_RE,
+    ETA_RE,
+    FORMAT_ID_PATTERN,
+    FORMAT_ID_UNKNOWN,
+    MERGE_TIERS,
+    MERGER_RE,
+    MIME_APPLICATION_PREFIX,
+    MIME_AUDIO_PREFIX,
+    MIME_VIDEO_PREFIX,
+    PROGRESS_PCT_RE,
+    SIZE_OF_RE,
+    SPEED_RE,
+    VIDEO_CONTAINER_EXTS,
+)
+from app.services.ytdlp.disk_space import check_disk_space, parse_size_bytes
+from app.services.ytdlp.youtube_opts import (
+    append_youtube_extractor_cli,
+    youtube_extractor_args,
+)
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-CODEC_NONE = "none"
-CODEC_UNKNOWN = "unknown"
-FORMAT_ID_UNKNOWN = "unknown"
-
-MIME_VIDEO_PREFIX = "video/"
-MIME_AUDIO_PREFIX = "audio/"
-MIME_APPLICATION_PREFIX = "application/"
-
-VIDEO_CONTAINER_EXTS = {"mp4", "m4v", "mov"}
-
-BLOCKED_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
-
-# Regex for safe format-id values (prevents command injection)
-FORMAT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9+\[\]<>=^:/\-_.]+$")
-
-# Merged quality tiers: (height, label, internal_id)
-MERGE_TIERS = [
-    (2160, "4K Ultra HD (2160p)", "merged-2160"),
-    (1440, "QHD (1440p)",         "merged-1440"),
-    (1080, "Full HD (1080p)",      "merged-1080"),
-    (720,  "HD (720p)",            "merged-720"),
-    (480,  "SD (480p)",            "merged-480"),
-]
-
-# Regex helpers for parsing yt-dlp progress output (used with --newline)
-_PROGRESS_PCT_RE = re.compile(r"\[download\]\s+([\d.]+)%")
-_SIZE_OF_RE = re.compile(r"of\s+~?([\d.]+)\s*(\S+)")
-_SPEED_RE = re.compile(r"at\s+([\d.]+\s*\S+/s)")
-_ETA_RE = re.compile(r"ETA\s+(\S+)")
-_DESTINATION_RE = re.compile(r"\[download\]\s+Destination:")
-_MERGER_RE = re.compile(r"\[Merger\]")
-
-_SIZE_UNITS: dict[str, float] = {
-    "B": 1, "KiB": 1024, "MiB": 1024**2, "GiB": 1024**3,
-    "KB": 1000, "MB": 1000**2, "GB": 1000**3,
-    "kB": 1000, "k": 1000,
-}
-
-
-def _youtube_player_clients() -> list[str] | None:
-    """Return explicit YouTube player_client list, or None for yt-dlp defaults."""
-    raw = settings.YTDLP_YOUTUBE_PLAYER_CLIENT.strip()
-    if not raw:
-        return None
-    return [x.strip() for x in raw.split(",") if x.strip()]
-
-
-def _youtube_extractor_args() -> dict[str, Any] | None:
-    clients = _youtube_player_clients()
-    if not clients:
-        return None
-    return {"youtube": {"player_client": clients}}
-
-
-def _append_youtube_extractor_cli(cmd: list[str]) -> None:
-    clients = _youtube_player_clients()
-    if not clients:
-        return
-    inner = ";".join(f"player_client={c}" for c in clients)
-    cmd.extend(["--extractor-args", f"youtube:{inner}"])
-
-
-def _parse_size_bytes(value: str, unit: str) -> int:
-    """Convert a size string like '422.93' + 'KiB' to integer bytes."""
-    multiplier = _SIZE_UNITS.get(unit, 1)
-    try:
-        return int(float(value) * multiplier)
-    except (ValueError, OverflowError):
-        return 0
 
 class YtDlpService:
     """Service for interacting with yt-dlp."""
@@ -170,7 +122,7 @@ class YtDlpService:
             parsed = urlparse(url)
         except Exception as e:
             logger.warning(f"Failed to parse URL: {e}")
-            raise InvalidUrlError("Malformed URL")
+            raise InvalidUrlError("Malformed URL") from None
 
         if parsed.scheme.lower() not in settings.allowed_schemes_list:
             raise InvalidUrlError(
@@ -409,7 +361,7 @@ class YtDlpService:
                 "Use YTDLP_YOUTUBE_PLAYER_CLIENT (default: tv_embedded)."
             )
 
-        if (yt_args := _youtube_extractor_args()):
+        if (yt_args := youtube_extractor_args()):
             ydl_opts["extractor_args"] = yt_args
 
         return ydl_opts
@@ -419,7 +371,7 @@ class YtDlpService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_duration(duration_raw: Any) -> int | None:
+    def _extract_duration(duration_raw: object) -> int | None:
         """Extract and validate duration in seconds."""
         if isinstance(duration_raw, (int, float)):
             return int(duration_raw)
@@ -542,7 +494,7 @@ class YtDlpService:
             "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
             "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
         ]
-        _append_youtube_extractor_cli(cmd)
+        append_youtube_extractor_cli(cmd)
 
         if settings.YTDLP_SLEEP_REQUESTS > 0:
             cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
@@ -586,6 +538,7 @@ class YtDlpService:
         out_abs = os.path.abspath(os.path.expanduser(output_dir))
         os.makedirs(out_abs, exist_ok=True)
 
+        check_disk_space()
         temp_dir = tempfile.mkdtemp(prefix="ytdl_cli_")
         dl_id = uuid.uuid4().hex[:12]
         work_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
@@ -614,7 +567,7 @@ class YtDlpService:
             )
         except subprocess.TimeoutExpired:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            raise YtdlpFailedError("Download timed out (1-hour limit)")
+            raise YtdlpFailedError("Download timed out (1-hour limit)") from None
 
         if result.returncode != 0:
             stderr_text = result.stderr.decode(errors="replace")
@@ -739,6 +692,7 @@ class YtDlpService:
         normalized_url = cls.normalize_url(url)
         safe_url = cls._sanitize_url_for_logging(normalized_url)
 
+        check_disk_space()
         temp_dir = tempfile.mkdtemp(prefix="ytdl_")
         dl_id = uuid.uuid4().hex[:12]
         output_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
@@ -757,7 +711,7 @@ class YtDlpService:
             )
         except subprocess.TimeoutExpired:
             shutil.rmtree(temp_dir, ignore_errors=True)
-            raise YtdlpFailedError("Download timed out (1-hour limit)")
+            raise YtdlpFailedError("Download timed out (1-hour limit)") from None
 
         if result.returncode != 0:
             stderr_text = result.stderr.decode(errors="replace")
@@ -786,7 +740,7 @@ class YtDlpService:
         cls,
         url: str,
         format_id: str,
-        task: Any,
+        task: DownloadTask,
     ) -> None:
         """Download merged format with real-time progress tracking.
 
@@ -812,6 +766,7 @@ class YtDlpService:
         normalized_url = cls.normalize_url(url)
         safe_url = cls._sanitize_url_for_logging(normalized_url)
 
+        check_disk_space()
         temp_dir = tempfile.mkdtemp(prefix="ytdl_")
         dl_id = uuid.uuid4().hex[:12]
         output_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
@@ -836,7 +791,7 @@ class YtDlpService:
             "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
             "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
         ]
-        _append_youtube_extractor_cli(cmd)
+        append_youtube_extractor_cli(cmd)
 
         if settings.YTDLP_SLEEP_REQUESTS > 0:
             cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
@@ -890,7 +845,7 @@ class YtDlpService:
                         continue
 
                     # Stream switch
-                    if _DESTINATION_RE.search(line):
+                    if DESTINATION_RE.search(line):
                         stream_index += 1
                         if is_two_stream:
                             task.phase = "video" if stream_index == 0 else "audio"
@@ -899,7 +854,7 @@ class YtDlpService:
                         continue
 
                     # Merge phase
-                    if _MERGER_RE.search(line):
+                    if MERGER_RE.search(line):
                         task.status = "merging"
                         task.phase = "merge"
                         task.progress = 92.0
@@ -908,7 +863,7 @@ class YtDlpService:
                         continue
 
                     # Download progress percentage
-                    pct_m = _PROGRESS_PCT_RE.search(line)
+                    pct_m = PROGRESS_PCT_RE.search(line)
                     if pct_m:
                         raw = float(pct_m.group(1))
                         if is_two_stream:
@@ -921,9 +876,9 @@ class YtDlpService:
                         task.progress = min(task.progress, 91.0)
 
                         # Parse total size (e.g. "of 422.93KiB")
-                        size_m = _SIZE_OF_RE.search(line)
+                        size_m = SIZE_OF_RE.search(line)
                         if size_m:
-                            stream_bytes = _parse_size_bytes(
+                            stream_bytes = parse_size_bytes(
                                 size_m.group(1), size_m.group(2)
                             )
                             if is_two_stream:
@@ -942,10 +897,10 @@ class YtDlpService:
                                 task.total_bytes * task.progress / 100.0
                             )
 
-                        spd_m = _SPEED_RE.search(line)
+                        spd_m = SPEED_RE.search(line)
                         if spd_m:
                             task.speed = spd_m.group(1)
-                        eta_m = _ETA_RE.search(line)
+                        eta_m = ETA_RE.search(line)
                         if eta_m:
                             task.eta = eta_m.group(1)
             except Exception:
@@ -997,6 +952,174 @@ class YtDlpService:
         )
 
     @classmethod
+    def download_single_with_progress(
+        cls,
+        url: str,
+        format_id: str,
+        task: DownloadTask,
+    ) -> None:
+        """Download a single-stream format with real-time progress tracking.
+
+        Unlike ``download_merged_with_progress``, this handles non-merged
+        formats (audio-only or video-only) and does not invoke ffmpeg merging.
+        The file is downloaded to disk first so the browser gets a fast
+        local server transfer instead of being exposed to YouTube throttling.
+
+        Args:
+            url: Video URL
+            format_id: Single-stream format ID
+            task: A :class:`~app.services.download_tasks.DownloadTask`
+                  whose attributes are mutated as progress arrives.
+        """
+        if not FORMAT_ID_PATTERN.match(format_id):
+            task.status = "failed"
+            task.error = "Invalid format_id"
+            return
+
+        normalized_url = cls.normalize_url(url)
+        safe_url = cls._sanitize_url_for_logging(normalized_url)
+
+        check_disk_space()
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_single_")
+        dl_id = uuid.uuid4().hex[:12]
+        output_template = os.path.join(temp_dir, f"{dl_id}.%(ext)s")
+
+        cmd: list[str] = [
+            "yt-dlp",
+            "-f", format_id,
+            "-o", output_template,
+            "--no-part",
+            "--newline",
+            "--progress",
+            "--no-playlist",
+            "--remote-components", "ejs:github",
+            "--concurrent-fragments", str(settings.YTDLP_CONCURRENT_FRAGMENTS),
+            "--throttled-rate", settings.YTDLP_THROTTLED_RATE,
+            "--buffer-size", settings.YTDLP_BUFFER_SIZE,
+            "--socket-timeout", str(settings.YTDLP_SOCKET_TIMEOUT),
+            "--retries", str(settings.YTDLP_RETRIES),
+            "--fragment-retries", str(settings.YTDLP_FRAGMENT_RETRIES),
+            "--extractor-retries", str(settings.YTDLP_EXTRACTOR_RETRIES),
+            "--file-access-retries", str(settings.YTDLP_FILE_ACCESS_RETRIES),
+        ]
+        append_youtube_extractor_cli(cmd)
+
+        if settings.YTDLP_SLEEP_REQUESTS > 0:
+            cmd.extend(["--sleep-requests", str(settings.YTDLP_SLEEP_REQUESTS)])
+        if settings.YTDLP_USER_AGENT:
+            cmd.extend(["--user-agent", settings.YTDLP_USER_AGENT])
+        if settings.YTDLP_HTTP_CHUNK_SIZE:
+            cmd.extend(["--http-chunk-size", settings.YTDLP_HTTP_CHUNK_SIZE])
+        if settings.YTDLP_SPONSORBLOCK_REMOVE:
+            cmd.extend(["--sponsorblock-remove", settings.YTDLP_SPONSORBLOCK_REMOVE])
+        if settings.YTDLP_COOKIES_FILE:
+            cmd.extend(["--cookies", settings.YTDLP_COOKIES_FILE])
+        elif settings.YTDLP_COOKIES_FROM_BROWSER:
+            cmd.extend(["--cookies-from-browser", settings.YTDLP_COOKIES_FROM_BROWSER])
+        if settings.YTDLP_PROXY:
+            cmd.extend(["--proxy", settings.YTDLP_PROXY])
+
+        cmd.append(normalized_url)
+
+        task.status = "downloading"
+        task.phase = ""
+
+        logger.info(
+            f"Starting progress-tracked single-stream download for {format_id} "
+            f"from {safe_url}"
+        )
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        )
+
+        def _read_stdout() -> None:
+            """Background thread: parse yt-dlp stdout for progress."""
+            if process.stdout is None:
+                return
+            try:
+                while True:
+                    line = process.stdout.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Download progress percentage
+                    pct_m = PROGRESS_PCT_RE.search(line)
+                    if pct_m:
+                        raw = float(pct_m.group(1))
+                        task.progress = min(raw, 99.0)
+
+                        size_m = SIZE_OF_RE.search(line)
+                        if size_m:
+                            task.total_bytes = parse_size_bytes(
+                                size_m.group(1), size_m.group(2)
+                            )
+                            task.downloaded_bytes = int(
+                                task.total_bytes * task.progress / 100.0
+                            )
+
+                        spd_m = SPEED_RE.search(line)
+                        if spd_m:
+                            task.speed = spd_m.group(1)
+                        eta_m = ETA_RE.search(line)
+                        if eta_m:
+                            task.eta = eta_m.group(1)
+            except Exception:
+                pass
+
+        reader = threading.Thread(target=_read_stdout, daemon=True)
+        reader.start()
+
+        try:
+            return_code = process.wait(timeout=3600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = "Download timed out (1-hour limit)"
+            return
+
+        reader.join(timeout=5)
+
+        if return_code != 0:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = "Download failed"
+            logger.error(
+                f"Single-stream download failed ({return_code}) for {safe_url}"
+            )
+            return
+
+        files = [f for f in os.listdir(temp_dir) if not f.startswith(".")]
+        if not files:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = "Download produced no output"
+            return
+
+        paths = [os.path.join(temp_dir, f) for f in files]
+        actual_path = max(paths, key=os.path.getsize)
+        task.file_path = actual_path
+        task.temp_dir = temp_dir
+        task.file_size = os.path.getsize(actual_path)
+        task.progress = 100.0
+        task.status = "completed"
+        task.speed = ""
+        task.eta = ""
+        logger.info(
+            f"Single-stream download complete: {task.file_size:,} bytes "
+            f"for {safe_url}"
+        )
+
+    @classmethod
     def download_format(
         cls,
         url: str,
@@ -1038,7 +1161,7 @@ class YtDlpService:
 
         except Exception as e:
             logger.error(f"Failed to start download process for {safe_url}: {e}")
-            raise YtdlpFailedError(f"Failed to start download: {e}")
+            raise YtdlpFailedError(f"Failed to start download: {e}") from e
 
     @classmethod
     def build_download_command(
@@ -1117,7 +1240,7 @@ class YtDlpService:
         if progress:
             cmd.extend(["--newline", "--progress"])
 
-        _append_youtube_extractor_cli(cmd)
+        append_youtube_extractor_cli(cmd)
 
         cmd.append(normalized_url)
         return cmd

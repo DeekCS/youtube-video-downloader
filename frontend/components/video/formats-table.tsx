@@ -18,11 +18,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { type VideoInfo, type Format } from '@/lib/api-client'
 import { formatFileSize, formatDuration } from '@/lib/utils'
 import {
-  downloadVideo,
   startDownload,
   subscribeToProgress,
   buildTaskFileUrl,
-  isMergedFormat,
   type DownloadProgress,
 } from '@/lib/api-client'
 
@@ -234,43 +232,11 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
     }
   }
 
-  /** Direct GET link for single-stream formats (browser handles progress). */
-  const handleDirectDownload = async (formatId: string, filename: string) => {
-    // Prevent double-submit
-    if (activeDownloads.current.has(formatId)) return
-    activeDownloads.current.add(formatId)
-
-    setDlStates((s) => ({
-      ...s,
-      [formatId]: { status: 'downloading', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, downloading: true },
-    }))
-
-
-    const release = () => activeDownloads.current.delete(formatId)
-
-    try {
-      // downloadVideo resolves when the tab regains focus or after 45 s
-      await downloadVideo(originalUrl, formatId, filename)
-    } catch {
-      // ignore — browser download errors are invisible to JS
-    } finally {
-      setDlStates((s) => {
-        const next = { ...s }
-        delete next[formatId]
-        return next
-      })
-      release()
-    }
-  }
-
   const handleDownload = (format: UserFriendlyFormat) => {
-    const ext = format.is_audio_only ? 'm4a' : 'mp4'
-    const filename = `${videoInfo?.title || 'video'}.${ext}`
-    if (isMergedFormat(format.id)) {
-      handleMergedDownload(format.id)
-    } else {
-      handleDirectDownload(format.id, filename)
-    }
+    // All formats go through the progress-tracked pipeline.
+    // This downloads to server disk first (at full speed), then serves
+    // the file locally — avoiding the slow YouTube-throttled browser pipe.
+    handleMergedDownload(format.id)
   }
 
   /** Render the download button or progress indicator for a given format. */

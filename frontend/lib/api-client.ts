@@ -29,6 +29,7 @@ export const VideoInfoSchema = z.object({
   title: z.string(),
   thumbnail_url: z.string().nullable(),
   duration_seconds: z.number().nullable(),
+  video_id: z.string().nullable().optional(),
   formats: z.array(FormatSchema),
 })
 
@@ -46,6 +47,7 @@ export const ErrorResponseSchema = z.object({
     'FORMAT_NOT_AVAILABLE',
     'YTDLP_FAILED',
     'INTERNAL_ERROR',
+    'RATE_LIMITED',
   ]),
   message: z.string(),
 })
@@ -125,68 +127,33 @@ export async function fetchFormats(url: string): Promise<VideoInfo> {
 }
 
 /**
- * Download a video in the specified format.
- * Uses GET endpoint with URL parameters for browser-native download handling.
+ * Build URL to fetch the completed file for a download task.
  */
-export async function downloadVideo(
-  url: string,
-  formatId: string,
-  filename: string
-): Promise<void> {
-  // Build the GET URL and trigger a browser-native download
-  const downloadUrl = buildDownloadUrl(url, formatId)
-
-  const link = document.createElement('a')
-  link.href = downloadUrl
-  link.download = filename
-  link.style.display = 'none'
-  document.body.appendChild(link)
-  link.click()
-  setTimeout(() => document.body.removeChild(link), 200)
-
-  // Return a promise that resolves when the tab regains focus (the user
-  // returned from the browser's "Save As" or download shelf) or after a
-  // 45-second safety timeout.  This lets callers display a meaningful
-  // "browser is downloading…" message rather than clearing state immediately.
-  return new Promise<void>((resolve) => {
-    const TIMEOUT_MS = 45_000
-    let settled = false
-
-    const finish = () => {
-      if (settled) return
-      settled = true
-      document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('focus', onVisible)
-      resolve()
-    }
-
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') finish()
-    }
-
-    document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('focus', onVisible)
-    setTimeout(finish, TIMEOUT_MS)
-  })
+export function buildTaskFileUrl(downloadId: string): string {
+  return `${env.API_BASE}/videos/download/${downloadId}/file`
 }
 
-/**
- * Progress update from SSE download endpoint.
- */
-export interface DownloadProgress {
-  status: 'pending' | 'downloading' | 'merging' | 'completed' | 'failed'
-  progress: number
-  phase: string
-  speed: string
-  eta: string
-  file_size: number
-  downloaded_bytes: number
-  total_bytes: number
-  error?: string
-}
+const StartDownloadResponseSchema = z.object({
+  download_id: z.string(),
+  filename: z.string(),
+})
+
+export const DownloadProgressSchema = z.object({
+  status: z.string(),
+  progress: z.number(),
+  phase: z.string(),
+  speed: z.string(),
+  eta: z.string(),
+  file_size: z.number(),
+  downloaded_bytes: z.number(),
+  total_bytes: z.number(),
+  error: z.string().optional(),
+})
+
+export type DownloadProgress = z.infer<typeof DownloadProgressSchema>
 
 /**
- * Start a progress-tracked download (merged formats).
+ * Start a server-side download and receive a task id for SSE progress + file fetch.
  */
 export async function startDownload(
   url: string,
@@ -194,115 +161,60 @@ export async function startDownload(
 ): Promise<{ downloadId: string; filename: string }> {
   const response = await fetch(`${env.API_BASE}/videos/download/start`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ url, format_id: formatId }),
   })
 
+  const data: unknown = await response.json()
+
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}))
-    throw new ApiError(
-      data.code || 'INTERNAL_ERROR',
-      data.message || 'Failed to start download',
-      response.status
-    )
+    const parsed = ErrorResponseSchema.safeParse(data)
+    if (parsed.success) {
+      throw new ApiError(parsed.data.code, parsed.data.message, response.status)
+    }
+    throw new ApiError('INTERNAL_ERROR', 'Failed to start download', response.status)
   }
 
-  const data = await response.json()
-  return { downloadId: data.download_id, filename: data.filename }
+  const ok = StartDownloadResponseSchema.parse(data)
+  return { downloadId: ok.download_id, filename: ok.filename }
 }
 
 /**
- * Subscribe to download progress events via SSE.
- * Returns a cleanup function to close the connection.
+ * Subscribe to SSE progress events for a download task. Returns a cleanup function.
  */
 export function subscribeToProgress(
   downloadId: string,
   onProgress: (progress: DownloadProgress) => void,
-  onError?: (error: Error) => void
+  onConnectionError: () => void
 ): () => void {
   const url = `${env.API_BASE}/videos/download/${downloadId}/progress`
+  const es = new EventSource(url)
 
-  let eventSource: EventSource | null = null
-  let retryCount = 0
-  const MAX_RETRIES = 3
-  const RETRY_DELAYS = [1000, 2000, 4000]
-  let closed = false
-  let retryTimer: ReturnType<typeof setTimeout> | null = null
-
-  const cleanup = () => {
-    closed = true
-    if (retryTimer !== null) clearTimeout(retryTimer)
-    eventSource?.close()
-  }
-
-  const connect = () => {
-    if (closed) return
-    eventSource = new EventSource(url)
-
-    eventSource.addEventListener('progress', (event: MessageEvent) => {
-      try {
-        const progress: DownloadProgress = JSON.parse(event.data)
-        retryCount = 0 // reset on successful message
-        onProgress(progress)
-        if (progress.status === 'completed' || progress.status === 'failed') {
-          cleanup()
-        }
-      } catch {
-        // ignore parse errors
+  const onMessage = (e: MessageEvent) => {
+    try {
+      const raw = JSON.parse(e.data as string) as unknown
+      const parsed = DownloadProgressSchema.safeParse(raw)
+      if (parsed.success) {
+        onProgress(parsed.data)
       }
-    })
-
-    eventSource.onerror = () => {
-      eventSource?.close()
-      eventSource = null
-
-      if (closed) return
-
-      if (retryCount < MAX_RETRIES) {
-        const delay = RETRY_DELAYS[retryCount] ?? 4000
-        retryCount++
-        retryTimer = setTimeout(connect, delay)
-      } else {
-        // Exhausted retries — propagate error
-        cleanup()
-        onError?.(new Error('Progress connection lost'))
-      }
+    } catch {
+      // ignore malformed chunks
     }
   }
 
-  connect()
-  return cleanup
-}
+  es.addEventListener('progress', onMessage as EventListener)
 
-/**
- * Build URL to fetch the completed file for a download task.
- */
-export function buildTaskFileUrl(downloadId: string): string {
-  return `${env.API_BASE}/videos/download/${downloadId}/file`
-}
+  es.onerror = () => {
+    es.close()
+    onConnectionError()
+  }
 
-/**
- * Check whether a format ID represents a merged (video+audio) download.
- */
-export function isMergedFormat(formatId: string): boolean {
-  return (
-    formatId.includes('+') ||
-    formatId === 'best' ||
-    formatId === 'bestvideo' ||
-    formatId.startsWith('best[') ||
-    formatId.startsWith('bestvideo[')
-  )
-}
-
-/**
- * Build download URL for a specific format (legacy GET method).
- */
-export function buildDownloadUrl(url: string, formatId: string): string {
-  const params = new URLSearchParams({
-    url,
-    format_id: formatId,
-  })
-  return `${env.API_BASE}/videos/download?${params.toString()}`
+  return () => {
+    es.removeEventListener('progress', onMessage as EventListener)
+    es.close()
+  }
 }
 
 /**

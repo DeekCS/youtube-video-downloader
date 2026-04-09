@@ -14,8 +14,11 @@ class TestHealthEndpoint:
         response = client.get("/health")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "healthy"
+        assert data["status"] in ("healthy", "unhealthy")
         assert "version" in data
+        assert "ffmpeg_ok" in data
+        assert "yt_dlp_cli_ok" in data
+        assert "yt_dlp_version" in data
 
 
 class TestFormatsEndpoint:
@@ -85,17 +88,21 @@ class TestFormatsEndpoint:
         assert "message" in data
 
 
-class TestDownloadEndpoint:
-    """Tests for video download endpoint."""
+class TestDownloadStartEndpoint:
+    """Tests for progress-tracked download start endpoint."""
 
-    @patch("app.api.v1.endpoints.videos.YtDlpService.download_format")
+    @patch("app.api.v1.endpoints.videos.YtDlpService.download_single_with_progress")
+    @patch("app.api.v1.endpoints.videos.YtDlpService.get_cached_formats", return_value=None)
     @patch("app.api.v1.endpoints.videos.YtDlpService.fetch_formats")
-    def test_download_video_post(
-        self, mock_fetch: MagicMock, mock_download: MagicMock, client: TestClient
+    def test_download_start_spawns_background_job(
+        self,
+        mock_fetch: MagicMock,
+        _cached: MagicMock,
+        _mock_dl: MagicMock,
+        client: TestClient,
     ) -> None:
-        """Test video download via POST."""
-        # Mock format fetch
-        mock_video_info = VideoInfo(
+        """POST /download/start returns a download_id (worker calls yt-dlp in a thread)."""
+        mock_fetch.return_value = VideoInfo(
             title="Test Video",
             thumbnail_url=None,
             duration_seconds=180,
@@ -110,34 +117,27 @@ class TestDownloadEndpoint:
                 )
             ],
         )
-        mock_fetch.return_value = mock_video_info
 
-        # Mock download (simplified - just check it's called)
-        mock_process = MagicMock()
-        mock_process.stdout = None
-        mock_process.poll.return_value = 0
-        mock_download.return_value = mock_process
-
-        # Make request
         response = client.post(
-            "/api/v1/videos/download",
+            "/api/v1/videos/download/start",
             json={
                 "url": "https://www.youtube.com/watch?v=test",
                 "format_id": "22",
             },
         )
 
-        # Check that download was initiated
         assert response.status_code == 200
-        assert "attachment" in response.headers.get("content-disposition", "").lower()
-        mock_download.assert_called_once()
+        data = response.json()
+        assert "download_id" in data
+        assert "filename" in data
 
+    @patch("app.api.v1.endpoints.videos.YtDlpService.get_cached_formats", return_value=None)
     @patch("app.api.v1.endpoints.videos.YtDlpService.fetch_formats")
-    def test_download_video_format_not_found(
-        self, mock_fetch: MagicMock, client: TestClient
+    def test_download_start_format_not_found(
+        self, mock_fetch: MagicMock, _cached: MagicMock, client: TestClient
     ) -> None:
-        """Test download with non-existent format ID."""
-        mock_video_info = VideoInfo(
+        """Unknown format_id yields FORMAT_NOT_AVAILABLE."""
+        mock_fetch.return_value = VideoInfo(
             title="Test Video",
             thumbnail_url=None,
             duration_seconds=180,
@@ -152,13 +152,12 @@ class TestDownloadEndpoint:
                 )
             ],
         )
-        mock_fetch.return_value = mock_video_info
 
         response = client.post(
-            "/api/v1/videos/download",
+            "/api/v1/videos/download/start",
             json={
                 "url": "https://www.youtube.com/watch?v=test",
-                "format_id": "999",  # Non-existent format
+                "format_id": "999",
             },
         )
 

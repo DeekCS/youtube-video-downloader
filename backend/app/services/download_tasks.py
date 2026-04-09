@@ -9,7 +9,6 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.core.logging import get_logger
 
@@ -29,14 +28,14 @@ class DownloadTask:
     progress: float = 0.0
     speed: str = ""
     eta: str = ""
-    file_path: Optional[str] = None
-    temp_dir: Optional[str] = None
+    file_path: str | None = None
+    temp_dir: str | None = None
     filename: str = ""
     content_type: str = "video/mp4"
     file_size: int = 0
     downloaded_bytes: int = 0
     total_bytes: int = 0
-    error: Optional[str] = None
+    error: str | None = None
     created_at: float = field(default_factory=time.time)
 
 
@@ -64,13 +63,13 @@ def create_task(
     return task
 
 
-def get_task(task_id: str) -> Optional[DownloadTask]:
+def get_task(task_id: str) -> DownloadTask | None:
     """Get a task by ID (returns ``None`` if not found)."""
     with _lock:
         return _tasks.get(task_id)
 
 
-def remove_task(task_id: str) -> Optional[DownloadTask]:
+def remove_task(task_id: str) -> DownloadTask | None:
     """Remove a task from the store and return it.
 
     Does **not** clean up temp files — the caller decides when to do that.
@@ -93,3 +92,24 @@ def cleanup_stale(max_age: int = 1800) -> None:
         if task and task.temp_dir:
             shutil.rmtree(task.temp_dir, ignore_errors=True)
             logger.info(f"Cleaned up stale download task {tid}")
+
+
+def cleanup_all() -> None:
+    """Remove ALL tasks and clean up their temp dirs.
+
+    Called during graceful shutdown to ensure no orphaned temp
+    directories remain on disk.
+    """
+    with _lock:
+        all_ids = list(_tasks.keys())
+
+    removed = 0
+    for tid in all_ids:
+        task = remove_task(tid)
+        if task and task.temp_dir:
+            shutil.rmtree(task.temp_dir, ignore_errors=True)
+            removed += 1
+
+    if removed:
+        logger.info(f"Shutdown cleanup: removed {removed} download tasks")
+

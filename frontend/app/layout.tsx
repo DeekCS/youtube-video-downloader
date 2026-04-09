@@ -16,8 +16,19 @@ export const viewport: Viewport = {
 }
 
 export const metadata: Metadata = {
-  title: 'Video Downloader',
-  description: 'Self-hosted multi-platform video downloader',
+  title: {
+    default: 'Video Downloader',
+    template: '%s · Video Downloader',
+  },
+  description:
+    'Self-hosted multi-platform video downloader. Fetch formats and download with yt-dlp.',
+  keywords: ['video downloader', 'yt-dlp', 'self-hosted', 'YouTube'],
+  robots: { index: true, follow: true },
+  openGraph: {
+    title: 'Video Downloader',
+    description: 'Self-hosted multi-platform video downloader',
+    type: 'website',
+  },
 }
 
 export default function RootLayout({
@@ -26,7 +37,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <Providers>{children}</Providers>
       </body>
