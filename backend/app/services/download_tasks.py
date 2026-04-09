@@ -3,6 +3,10 @@
 Each merged download gets a ``DownloadTask`` that is updated in real-time
 by the yt-dlp subprocess reader thread.  The SSE endpoint polls the task
 and streams progress events to the browser.
+
+**Multi-process limitation:** Task state lives only in this Python process.
+Run uvicorn with ``UVICORN_WORKERS=1`` (default in ``backend/Dockerfile``) or use
+a single replica; otherwise ``download_id`` lookups may 404 on another worker.
 """
 
 import shutil

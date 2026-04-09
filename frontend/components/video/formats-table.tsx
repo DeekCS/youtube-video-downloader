@@ -15,7 +15,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type VideoInfo, type Format } from '@/lib/api-client'
+import { type VideoInfo } from '@/lib/api-client'
+import { getCommonFormats, type UserFriendlyFormat } from '@/lib/format-catalog'
 import { formatFileSize, formatDuration } from '@/lib/utils'
 import {
   startDownload,
@@ -28,74 +29,6 @@ interface FormatsTableProps {
   videoInfo: VideoInfo | null
   originalUrl: string
   isLoading?: boolean
-}
-
-interface UserFriendlyFormat extends Format {
-  friendlyLabel: string
-  friendlyType: string
-  priority: number
-}
-
-function getCommonFormats(formats: Format[]): UserFriendlyFormat[] {
-  const formatted: UserFriendlyFormat[] = []
-
-  // Separate merged formats (yt-dlp auto-merge selectors) from regular formats
-  const mergedFormats = formats.filter(f =>
-    f.id.includes('+') ||
-    f.quality_label.toLowerCase().includes('merged') ||
-    f.id.startsWith('bestvideo') ||
-    f.id === 'best'
-  )
-  const videoOnly = formats.filter(f => f.is_video_only)
-  const audioOnly = formats.filter(f => f.is_audio_only)
-
-  let priority = 1
-
-  // Merged quality tiers (these download video+audio and merge via ffmpeg)
-  const mergedTiers = [
-    { pattern: 'best available', label: 'Best Quality (Video + Audio)', match: (f: Format) => f.quality_label.toLowerCase().includes('best available') },
-    { pattern: '2160', label: '4K Ultra HD (2160p) — Video + Audio', match: (f: Format) => f.quality_label.includes('2160') },
-    { pattern: '1440', label: 'QHD (1440p) — Video + Audio', match: (f: Format) => f.quality_label.includes('1440') },
-    { pattern: '1080', label: 'Full HD (1080p) — Video + Audio', match: (f: Format) => f.quality_label.includes('1080') },
-    { pattern: '720', label: 'HD (720p) — Video + Audio', match: (f: Format) => f.quality_label.includes('720') },
-    { pattern: '480', label: 'SD (480p) — Video + Audio', match: (f: Format) => f.quality_label.includes('480') },
-  ]
-
-  mergedTiers.forEach(({ label, match }) => {
-    const format = mergedFormats.find(f => match(f))
-    if (format) {
-      formatted.push({
-        ...format,
-        friendlyLabel: label,
-        friendlyType: '🎬 Video + Audio (MP4)',
-        priority: priority++
-      })
-    }
-  })
-
-  // Best audio only
-  if (audioOnly.length > 0) {
-    const bestAudio = audioOnly.sort((a, b) => {
-      const aSize = a.filesize_bytes || 0
-      const bSize = b.filesize_bytes || 0
-      return bSize - aSize
-    })[0]
-
-    const isWebm = bestAudio.mime_type.includes('webm')
-    formatted.push({
-      ...bestAudio,
-      friendlyLabel: 'Audio Only (Best Quality)',
-      friendlyType: isWebm ? '🎵 Audio (WebM) ⚠️' : '🎵 Audio (M4A)',
-      priority: 100
-    })
-  }
-
-  // Remove duplicates and sort by priority
-  const unique = formatted.filter((format, index, self) =>
-    index === self.findIndex(f => f.id === format.id)
-  )
-
-  return unique.sort((a, b) => a.priority - b.priority)
 }
 
 export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: FormatsTableProps) {
@@ -420,9 +353,9 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
             ✨ Merged formats automatically combine the best video and audio streams into a single MP4 file using ffmpeg.
           </p>
         ) : null}
-        {commonFormats.some(f => f.friendlyType.includes('⚠️')) ? (
+        {commonFormats.some((f) => f.friendlyType.toLowerCase().includes('webm')) ? (
           <p className="text-xs text-muted-foreground px-2">
-            ⚠️ WebM formats may not play in QuickTime Player or Apple apps. Use VLC or convert to M4A/MP4 for best compatibility.
+            WebM audio may not play in QuickTime or some Apple apps. Use VLC or convert to M4A/MP4 for best compatibility.
           </p>
         ) : null}
       </div>

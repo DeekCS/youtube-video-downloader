@@ -146,8 +146,11 @@ class Settings(BaseSettings):
         description="Number of times to retry on file access errors"
     )
     YTDLP_USE_DASH_FORMATS: bool = Field(
-        default=True,
-        description="Force DASH formats which are often less throttled (YouTube)"
+        default=False,
+        description=(
+            "When True, prefer YouTube DASH manifests by skipping HLS-only paths where "
+            "supported (merged into youtube extractor_args). May affect format availability."
+        ),
     )
     YTDLP_PROXY: str | None = Field(
         default=None,

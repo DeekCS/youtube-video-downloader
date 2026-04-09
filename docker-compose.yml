@@ -12,6 +12,8 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PORT=${PORT:-8000}
+      # Must be 1 while download tasks live in process memory (see download_tasks module).
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-1}
       # yt-dlp speed tuning (aggressive + anti-throttling)
       - YTDLP_CONCURRENT_FRAGMENTS=32
       - YTDLP_HTTP_CHUNK_SIZE=

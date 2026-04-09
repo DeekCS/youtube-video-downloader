@@ -58,6 +58,7 @@ def _cleanup_orphaned_temp_dirs() -> None:
     patterns = [
         f"{tempfile.gettempdir()}/ytdl_*",
         f"{tempfile.gettempdir()}/ytdl_single_*",
+        f"{tempfile.gettempdir()}/ytdl_cli_*",
     ]
     removed = 0
     for pattern in patterns:

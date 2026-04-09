@@ -53,6 +53,8 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV ENV=production
 ENV PORT=8000
+# In-memory download tasks require a single worker unless you use external task storage.
+ENV UVICORN_WORKERS=1
 
 # Health check (uses PORT env var)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -62,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 # Run the application with uvicorn (Railway injects PORT, defaults to 8000)
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-1}"]

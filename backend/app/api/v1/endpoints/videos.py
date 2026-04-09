@@ -16,7 +16,12 @@ from sse_starlette.sse import EventSourceResponse
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.rate_limit import limiter
-from app.models.video import DownloadRequest, FormatsRequest, VideoInfo
+from app.models.video import (
+    DownloadRequest,
+    DownloadStartResponse,
+    FormatsRequest,
+    VideoInfo,
+)
 from app.services.download_tasks import (
     cleanup_stale,
     create_task,
@@ -149,17 +154,18 @@ _active_downloads_lock = threading.Lock()
 
 @router.post(
     "/download/start",
+    response_model=DownloadStartResponse,
     summary="Start a download with progress tracking",
     description="Starts a download in the background (merged or single-stream) and returns a download ID for progress tracking",
     responses={
-        200: {"description": "Download started"},
+        200: {"description": "Download started", "model": DownloadStartResponse},
         400: {"description": "Invalid request"},
         404: {"description": "Format not found"},
         429: {"description": "Rate limit exceeded"},
     },
 )
 @limiter.limit("5/minute")
-async def start_download(request: Request, body: DownloadRequest) -> dict:
+async def start_download(request: Request, body: DownloadRequest) -> DownloadStartResponse:
     """Start a download with progress tracking.
 
     Returns a ``download_id`` the client uses to poll progress via SSE
@@ -174,10 +180,12 @@ async def start_download(request: Request, body: DownloadRequest) -> dict:
     # Housekeeping: remove stale tasks
     cleanup_stale()
 
-    video_info = YtDlpService.get_cached_formats(body.url)
+    normalized_url = YtDlpService.normalize_url(body.url)
+
+    video_info = YtDlpService.get_cached_formats(normalized_url)
     if video_info is None:
         video_info = await asyncio.to_thread(
-            YtDlpService.fetch_formats, body.url
+            YtDlpService.fetch_formats, normalized_url
         )
 
     selected_format = next(
@@ -191,7 +199,7 @@ async def start_download(request: Request, body: DownloadRequest) -> dict:
             f"Format '{body.format_id}' not found in available formats"
         )
 
-    dedup_key = (body.url, body.format_id)
+    dedup_key = (normalized_url, body.format_id)
     is_merged = YtDlpService.is_merged_format(body.format_id)
 
     # Determine filename and content type based on format type
@@ -213,7 +221,10 @@ async def start_download(request: Request, body: DownloadRequest) -> dict:
                 logger.info(
                     f"Reusing existing download task {existing_id} for {dedup_key[1]}"
                 )
-                return {"download_id": existing_id, "filename": existing_task.filename}
+                return DownloadStartResponse(
+                    download_id=existing_id,
+                    filename=existing_task.filename,
+                )
         # No live task — create a new one
         task_id = uuid.uuid4().hex[:16]
         _active_downloads[dedup_key] = task_id
@@ -224,11 +235,11 @@ async def start_download(request: Request, body: DownloadRequest) -> dict:
         try:
             if is_merged:
                 YtDlpService.download_merged_with_progress(
-                    body.url, body.format_id, task
+                    normalized_url, body.format_id, task
                 )
             else:
                 YtDlpService.download_single_with_progress(
-                    body.url, body.format_id, task
+                    normalized_url, body.format_id, task
                 )
         except Exception as exc:
             task.status = "failed"
@@ -242,16 +253,18 @@ async def start_download(request: Request, body: DownloadRequest) -> dict:
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
-    return {"download_id": task_id, "filename": filename}
+    return DownloadStartResponse(download_id=task_id, filename=filename)
 
 
 @router.get(
     "/download/{download_id}/progress",
     summary="Stream download progress via SSE",
     description="Server-Sent Events stream with real-time download progress",
+    responses={429: {"description": "Rate limit exceeded"}},
 )
+@limiter.limit("60/minute")
 async def download_progress(
-    download_id: str, request: Request
+    request: Request, download_id: str
 ) -> EventSourceResponse:
     """SSE endpoint streaming progress events for a download task."""
     task = get_task(download_id)

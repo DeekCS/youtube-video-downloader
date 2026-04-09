@@ -364,6 +364,22 @@ class YtDlpService:
         if (yt_args := youtube_extractor_args()):
             ydl_opts["extractor_args"] = yt_args
 
+        if settings.YTDLP_USE_DASH_FORMATS:
+            # Prefer DASH manifests over HLS for YouTube where both exist (can reduce throttling).
+            ea = ydl_opts.setdefault("extractor_args", {})
+            yt = ea.setdefault("youtube", {})
+            if isinstance(yt, dict):
+                skip = yt.get("skip")
+                if skip is None:
+                    yt["skip"] = ["hls"]
+                elif isinstance(skip, (list, tuple)):
+                    sk_list = list(skip)
+                    if "hls" not in sk_list:
+                        sk_list.append("hls")
+                    yt["skip"] = sk_list
+                elif skip != "hls":
+                    yt["skip"] = [skip, "hls"]
+
         return ydl_opts
 
     # ------------------------------------------------------------------

@@ -173,6 +173,22 @@ class ErrorResponse(BaseModel):
     )
 
 
+class DownloadStartResponse(BaseModel):
+    """Response after starting a progress-tracked download."""
+
+    download_id: str = Field(..., description="Task id for SSE progress and file download")
+    filename: str = Field(..., description="Suggested filename when saving the file")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "download_id": "a1b2c3d4e5f67890",
+                "filename": "Example Title.mp4",
+            }
+        }
+    )
+
+
 class HealthResponse(BaseModel):
     """Health check response model."""
 

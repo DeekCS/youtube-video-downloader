@@ -138,6 +138,12 @@ const StartDownloadResponseSchema = z.object({
   filename: z.string(),
 })
 
+/** Validates inputs before POST /download/start (mirrors backend DownloadRequest). */
+export const StartDownloadRequestSchema = z.object({
+  url: z.string().min(10).max(2048),
+  format_id: z.string().min(1).max(500),
+})
+
 export const DownloadProgressSchema = z.object({
   status: z.string(),
   progress: z.number(),
@@ -159,12 +165,17 @@ export async function startDownload(
   url: string,
   formatId: string
 ): Promise<{ downloadId: string; filename: string }> {
+  const payload = StartDownloadRequestSchema.parse({
+    url: url.trim(),
+    format_id: formatId.trim(),
+  })
+
   const response = await fetch(`${env.API_BASE}/videos/download/start`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ url, format_id: formatId }),
+    body: JSON.stringify({ url: payload.url, format_id: payload.format_id }),
   })
 
   const data: unknown = await response.json()
@@ -192,11 +203,15 @@ export function subscribeToProgress(
   const url = `${env.API_BASE}/videos/download/${downloadId}/progress`
   const es = new EventSource(url)
 
+  let consecutiveErrors = 0
+  const maxTransientErrors = 4
+
   const onMessage = (e: MessageEvent) => {
     try {
       const raw = JSON.parse(e.data as string) as unknown
       const parsed = DownloadProgressSchema.safeParse(raw)
       if (parsed.success) {
+        consecutiveErrors = 0
         onProgress(parsed.data)
       }
     } catch {
@@ -206,9 +221,16 @@ export function subscribeToProgress(
 
   es.addEventListener('progress', onMessage as EventListener)
 
+  es.onopen = () => {
+    consecutiveErrors = 0
+  }
+
   es.onerror = () => {
-    es.close()
-    onConnectionError()
+    consecutiveErrors += 1
+    if (consecutiveErrors >= maxTransientErrors) {
+      es.close()
+      onConnectionError()
+    }
   }
 
   return () => {
