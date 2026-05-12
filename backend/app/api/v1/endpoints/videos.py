@@ -27,6 +27,7 @@ from app.services.download_tasks import (
     create_task,
     get_task,
     remove_task,
+    update_task,
 )
 from app.services.yt_dlp_service import YtDlpService
 
@@ -244,6 +245,7 @@ async def start_download(request: Request, body: DownloadRequest) -> DownloadSta
         except Exception as exc:
             task.status = "failed"
             task.error = str(exc)
+            update_task(task.task_id, status="failed", error=str(exc))
         finally:
             # Release the deduplication slot once the download is finished
             with _active_downloads_lock:
