@@ -1,4 +1,21 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    mem_limit: 192m
+
   backend:
     build:
       context: ./backend
@@ -12,8 +29,9 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PORT=${PORT:-8000}
-      # Must be 1 while download tasks live in process memory (see download_tasks module).
-      - UVICORN_WORKERS=${UVICORN_WORKERS:-1}
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-4}
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_ENABLED=true
       # yt-dlp speed tuning (aggressive + anti-throttling)
       - YTDLP_CONCURRENT_FRAGMENTS=32
       - YTDLP_HTTP_CHUNK_SIZE=
@@ -21,19 +39,21 @@ services:
       - YTDLP_BUFFER_SIZE=1M
       - YTDLP_SOCKET_TIMEOUT=60
       - YTDLP_FILE_ACCESS_RETRIES=5
-      # Anti-throttling (YouTube workarounds)
       - YTDLP_THROTTLED_RATE=50K
-      # iOS client requires a PO token or yt-dlp reports no formats; tv_embedded is the default in code
       - YTDLP_USE_IOS_CLIENT=false
       - YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
       - YTDLP_PREFER_FREE_FORMATS=true
       - YTDLP_USER_AGENT=Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+    mem_limit: 1g
 
   frontend:
     build:
@@ -52,6 +72,9 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  redis_data:
 
 networks:
   default:

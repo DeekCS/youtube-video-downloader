@@ -53,8 +53,8 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV ENV=production
 ENV PORT=8000
-# In-memory download tasks require a single worker unless you use external task storage.
-ENV UVICORN_WORKERS=1
+# Redis-backed task state enables multiple workers.
+ENV UVICORN_WORKERS=4
 
 # Health check (uses PORT env var)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
