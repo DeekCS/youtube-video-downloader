@@ -194,6 +194,9 @@ export async function startDownload(
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new ApiError('INTERNAL_ERROR', 'Request timed out after 30 seconds')
     }
+    if (error instanceof z.ZodError) {
+      throw new ApiError('INTERNAL_ERROR', 'Invalid response from server')
+    }
     if (error instanceof Error) throw new ApiError('INTERNAL_ERROR', error.message)
     throw new ApiError('INTERNAL_ERROR', 'An unexpected error occurred')
   } finally {
