@@ -212,3 +212,7 @@ class HealthResponse(BaseModel):
         default=None,
         description="Reported yt-dlp CLI version string, if available",
     )
+    redis_ok: bool = Field(
+        default=False,
+        description="Whether Redis is reachable",
+    )

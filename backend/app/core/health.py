@@ -11,7 +11,7 @@ _YTDLP_TIMEOUT_SEC: Final[float] = 5.0
 
 
 def run_health_checks() -> HealthResponse:
-    """Return health payload including ffmpeg and yt-dlp CLI availability."""
+    """Return health payload including ffmpeg, yt-dlp CLI, and Redis availability."""
     ffmpeg_ok = shutil.which("ffmpeg") is not None
     ytdlp_version: str | None = None
     ytdlp_cli_ok = False
@@ -29,6 +29,16 @@ def run_health_checks() -> HealthResponse:
     except (OSError, subprocess.TimeoutExpired):
         ytdlp_cli_ok = False
 
+    redis_ok = False
+    try:
+        from app.core.redis import get_sync_redis
+        r = get_sync_redis()
+        if r is not None:
+            r.ping()
+            redis_ok = True
+    except Exception:
+        redis_ok = False
+
     deps_ok = ffmpeg_ok and ytdlp_cli_ok
     return HealthResponse(
         status="healthy" if deps_ok else "unhealthy",
@@ -36,4 +46,5 @@ def run_health_checks() -> HealthResponse:
         ffmpeg_ok=ffmpeg_ok,
         yt_dlp_cli_ok=ytdlp_cli_ok,
         yt_dlp_version=ytdlp_version,
+        redis_ok=redis_ok,
     )
