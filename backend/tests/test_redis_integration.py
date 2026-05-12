@@ -129,3 +129,62 @@ class TestRedisDownloadTasks:
         finally:
             redis_mod._redis_available = False
             redis_mod._sync_client = None
+
+
+class TestRedisFormatCache:
+    def test_get_cached_formats_returns_none_when_cache_miss(self) -> None:
+        from app.core import redis as redis_mod
+        from app.services.yt_dlp_service import YtDlpService
+
+        redis_mod._redis_available = False
+        YtDlpService._formats_cache = None  # clear in-memory cache
+
+        result = YtDlpService.get_cached_formats("https://example.com/video")
+        assert result is None
+
+    def test_cache_set_and_get_roundtrip_in_memory(self) -> None:
+        from app.core import redis as redis_mod
+        from app.models.video import Format, VideoInfo
+        from app.services.yt_dlp_service import YtDlpService
+
+        redis_mod._redis_available = False
+        YtDlpService._formats_cache = None
+
+        url = "https://www.youtube.com/watch?v=test123"
+        video_info = VideoInfo(
+            title="Test",
+            thumbnail_url=None,
+            duration_seconds=60,
+            video_id="test123",
+            formats=[Format(id="22", quality_label="720p", mime_type="video/mp4",
+                           filesize_bytes=None, is_audio_only=False, is_video_only=False)],
+        )
+        YtDlpService._cache_set_formats(url, video_info)
+        result = YtDlpService.get_cached_formats(url)
+        assert result is not None
+        assert result.title == "Test"
+
+    def test_cache_set_writes_to_redis_when_available(self) -> None:
+        from app.core import redis as redis_mod
+        from app.models.video import Format, VideoInfo
+        from app.services.yt_dlp_service import YtDlpService
+
+        mock_redis = MagicMock()
+        redis_mod._sync_client = mock_redis
+        redis_mod._redis_available = True
+
+        try:
+            url = "https://www.youtube.com/watch?v=abc"
+            video_info = VideoInfo(
+                title="Redis Test",
+                thumbnail_url=None,
+                duration_seconds=30,
+                video_id="abc",
+                formats=[Format(id="22", quality_label="720p", mime_type="video/mp4",
+                               filesize_bytes=None, is_audio_only=False, is_video_only=False)],
+            )
+            YtDlpService._cache_set_formats(url, video_info)
+            mock_redis.setex.assert_called_once()
+        finally:
+            redis_mod._redis_available = False
+            redis_mod._sync_client = None

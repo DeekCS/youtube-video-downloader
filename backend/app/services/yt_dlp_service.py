@@ -84,8 +84,21 @@ class YtDlpService:
 
     @classmethod
     def get_cached_formats(cls, url: str) -> VideoInfo | None:
-        """Return cached VideoInfo for *url*, or None."""
+        """Return cached VideoInfo for *url*, or None. Tries Redis first."""
+        from app.core.redis import get_sync_redis
+
         normalized_url = cls.normalize_url(url)
+
+        r = get_sync_redis()
+        if r is not None and cls._cache_enabled():
+            try:
+                key = f"ytdl:formats:{hashlib.sha256(normalized_url.encode()).hexdigest()}"
+                raw = r.get(key)
+                if raw:
+                    return VideoInfo.model_validate_json(raw)
+            except Exception as exc:
+                logger.debug(f"Redis format cache get error: {exc}")
+
         if not cls._cache_enabled():
             return None
         with cls._formats_cache_lock:
@@ -93,7 +106,17 @@ class YtDlpService:
 
     @classmethod
     def _cache_set_formats(cls, normalized_url: str, video_info: VideoInfo) -> None:
-        """Store *video_info* in the cache under *normalized_url*."""
+        """Store *video_info* in Redis cache and in-memory fallback."""
+        from app.core.redis import get_sync_redis
+
+        r = get_sync_redis()
+        if r is not None and cls._cache_enabled():
+            try:
+                key = f"ytdl:formats:{hashlib.sha256(normalized_url.encode()).hexdigest()}"
+                r.setex(key, settings.YTDLP_FORMATS_CACHE_TTL_SECONDS, video_info.model_dump_json())
+            except Exception as exc:
+                logger.debug(f"Redis format cache set error: {exc}")
+
         if not cls._cache_enabled():
             return
         with cls._formats_cache_lock:
@@ -828,6 +851,8 @@ class YtDlpService:
 
         task.status = "downloading"
         task.phase = "video" if is_two_stream else ""
+        from app.services.download_tasks import update_task as _update_task
+        _update_task(task.task_id, status="downloading", phase=task.phase)
 
         logger.info(
             f"Starting progress-tracked download for {format_id} from {safe_url}"
@@ -847,6 +872,26 @@ class YtDlpService:
         def _read_stdout() -> None:
             """Background thread: parse yt-dlp stdout for progress."""
             nonlocal stream_index
+            import time as _time
+            from app.services.download_tasks import update_task as _update_task
+
+            _last_flush = [0.0]
+
+            def _flush(force: bool = False) -> None:
+                now = _time.monotonic()
+                if force or now - _last_flush[0] >= 1.0:
+                    _update_task(
+                        task.task_id,
+                        status=task.status,
+                        phase=task.phase,
+                        progress=task.progress,
+                        speed=task.speed,
+                        eta=task.eta,
+                        downloaded_bytes=task.downloaded_bytes,
+                        total_bytes=task.total_bytes,
+                    )
+                    _last_flush[0] = now
+
             if process.stdout is None:
                 return
             try:
@@ -867,6 +912,7 @@ class YtDlpService:
                             task.phase = "video" if stream_index == 0 else "audio"
                         task.speed = ""
                         task.eta = ""
+                        _flush(force=True)
                         continue
 
                     # Merge phase
@@ -876,6 +922,7 @@ class YtDlpService:
                         task.progress = 92.0
                         task.speed = ""
                         task.eta = ""
+                        _flush(force=True)
                         continue
 
                     # Download progress percentage
@@ -919,6 +966,7 @@ class YtDlpService:
                         eta_m = ETA_RE.search(line)
                         if eta_m:
                             task.eta = eta_m.group(1)
+                        _flush()
             except Exception:
                 pass  # best-effort; don't crash on parse errors
 
@@ -940,6 +988,8 @@ class YtDlpService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download failed"
+            from app.services.download_tasks import update_task as _update_task
+            _update_task(task.task_id, status="failed", error="Download failed")
             logger.error(
                 f"Progress download failed ({return_code}) for {safe_url}"
             )
@@ -952,6 +1002,8 @@ class YtDlpService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download produced no output"
+            from app.services.download_tasks import update_task as _update_task
+            _update_task(task.task_id, status="failed", error="Download produced no output")
             return
 
         paths = [os.path.join(temp_dir, f) for f in files]
@@ -963,6 +1015,17 @@ class YtDlpService:
         task.status = "completed"
         task.speed = ""
         task.eta = ""
+        from app.services.download_tasks import update_task as _update_task
+        _update_task(
+            task.task_id,
+            file_path=actual_path,
+            temp_dir=temp_dir,
+            file_size=task.file_size,
+            progress=100.0,
+            status="completed",
+            speed="",
+            eta="",
+        )
         logger.info(
             f"Progress download complete: {task.file_size:,} bytes for {safe_url}"
         )
@@ -1039,6 +1102,8 @@ class YtDlpService:
 
         task.status = "downloading"
         task.phase = ""
+        from app.services.download_tasks import update_task as _update_task
+        _update_task(task.task_id, status="downloading", phase="")
 
         logger.info(
             f"Starting progress-tracked single-stream download for {format_id} "
@@ -1056,6 +1121,25 @@ class YtDlpService:
 
         def _read_stdout() -> None:
             """Background thread: parse yt-dlp stdout for progress."""
+            import time as _time
+            from app.services.download_tasks import update_task as _update_task
+
+            _last_flush = [0.0]
+
+            def _flush(force: bool = False) -> None:
+                now = _time.monotonic()
+                if force or now - _last_flush[0] >= 1.0:
+                    _update_task(
+                        task.task_id,
+                        progress=task.progress,
+                        speed=task.speed,
+                        eta=task.eta,
+                        downloaded_bytes=task.downloaded_bytes,
+                        total_bytes=task.total_bytes,
+                        status=task.status,
+                    )
+                    _last_flush[0] = now
+
             if process.stdout is None:
                 return
             try:
@@ -1088,6 +1172,7 @@ class YtDlpService:
                         eta_m = ETA_RE.search(line)
                         if eta_m:
                             task.eta = eta_m.group(1)
+                        _flush()
             except Exception:
                 pass
 
@@ -1101,6 +1186,8 @@ class YtDlpService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download timed out (1-hour limit)"
+            from app.services.download_tasks import update_task as _update_task
+            _update_task(task.task_id, status="failed", error="Download timed out (1-hour limit)")
             return
 
         reader.join(timeout=5)
@@ -1109,6 +1196,8 @@ class YtDlpService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download failed"
+            from app.services.download_tasks import update_task as _update_task
+            _update_task(task.task_id, status="failed", error="Download failed")
             logger.error(
                 f"Single-stream download failed ({return_code}) for {safe_url}"
             )
@@ -1119,6 +1208,8 @@ class YtDlpService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download produced no output"
+            from app.services.download_tasks import update_task as _update_task
+            _update_task(task.task_id, status="failed", error="Download produced no output")
             return
 
         paths = [os.path.join(temp_dir, f) for f in files]
@@ -1130,6 +1221,17 @@ class YtDlpService:
         task.status = "completed"
         task.speed = ""
         task.eta = ""
+        from app.services.download_tasks import update_task as _update_task
+        _update_task(
+            task.task_id,
+            file_path=actual_path,
+            temp_dir=temp_dir,
+            file_size=task.file_size,
+            progress=100.0,
+            status="completed",
+            speed="",
+            eta="",
+        )
         logger.info(
             f"Single-stream download complete: {task.file_size:,} bytes "
             f"for {safe_url}"
