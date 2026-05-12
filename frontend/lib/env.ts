@@ -11,6 +11,12 @@ function getApiBase(): string {
   if (process.env.NODE_ENV === 'development') {
     return 'http://localhost:8000/api/v1'
   }
+  // During `next build` the static-generation worker runs without the runtime
+  // env var (it gets baked in via --build-arg / Railway Variables).  Allow the
+  // build to complete; the getter below will throw at actual request time.
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return ''
+  }
   throw new Error(
     'Missing NEXT_PUBLIC_API_BASE. Set it for the frontend Docker build and runtime ' +
       '(e.g. Railway → Frontend service → Variables → NEXT_PUBLIC_API_BASE = https://<backend>/api/v1), ' +
@@ -35,6 +41,11 @@ export const env = {
  * Check environment at startup (layout / build).
  */
 export function validateEnv(): void {
+  // Skip during `next build` — the Dockerfile already enforces the var is set
+  // before the build runs (see the RUN guard in frontend/Dockerfile).
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return
+  }
   const base = getApiBase()
   if (!base.startsWith('http')) {
     throw new Error('NEXT_PUBLIC_API_BASE must start with http:// or https://')
