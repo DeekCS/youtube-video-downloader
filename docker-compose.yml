@@ -44,7 +44,7 @@ services:
       - YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded
       - YTDLP_PREFER_FREE_FORMATS=true
       - YTDLP_USER_AGENT=Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-4}
     depends_on:
       redis:
         condition: service_healthy
