@@ -10,7 +10,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -57,7 +57,7 @@ logger = get_logger(__name__)
 class YtDlpService:
     """Service for interacting with yt-dlp."""
 
-    _formats_cache: TTLCache | None = None
+    _formats_cache: TTLCache[str, VideoInfo] | None = None
     _formats_cache_lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -65,7 +65,7 @@ class YtDlpService:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _get_cache(cls) -> TTLCache:
+    def _get_cache(cls) -> TTLCache[str, VideoInfo]:
         """Lazy-initialise and return the TTL cache."""
         if cls._formats_cache is None:
             cls._formats_cache = TTLCache(
@@ -93,7 +93,7 @@ class YtDlpService:
         if r is not None and cls._cache_enabled():
             try:
                 key = f"ytdl:formats:{hashlib.sha256(normalized_url.encode()).hexdigest()}"
-                raw = r.get(key)
+                raw = cast("str | None", r.get(key))
                 if raw:
                     return VideoInfo.model_validate_json(raw)
             except Exception as exc:
@@ -873,6 +873,7 @@ class YtDlpService:
             """Background thread: parse yt-dlp stdout for progress."""
             nonlocal stream_index
             import time as _time
+
             from app.services.download_tasks import update_task as _update_task
 
             _last_flush = [0.0]
@@ -1124,6 +1125,7 @@ class YtDlpService:
         def _read_stdout() -> None:
             """Background thread: parse yt-dlp stdout for progress."""
             import time as _time
+
             from app.services.download_tasks import update_task as _update_task
 
             _last_flush = [0.0]

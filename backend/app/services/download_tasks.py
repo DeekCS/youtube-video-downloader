@@ -12,7 +12,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from app.core.logging import get_logger
 
@@ -139,7 +139,7 @@ def get_task(task_id: str) -> DownloadTask | None:
     r = get_sync_redis()
     if r is not None:
         try:
-            data = r.hgetall(f"{_REDIS_KEY_PREFIX}{task_id}")
+            data = cast("dict[str, str]", r.hgetall(f"{_REDIS_KEY_PREFIX}{task_id}"))
             if data:
                 return _dict_to_task(data)
         except Exception as exc:
@@ -206,9 +206,9 @@ def cleanup_stale(max_age: int = 1800) -> None:
         try:
             for key in r.scan_iter(f"{_REDIS_KEY_PREFIX}*", count=100):
                 try:
-                    created_at_raw = r.hget(key, "created_at")
+                    created_at_raw = cast("str | None", r.hget(key, "created_at"))
                     if created_at_raw and now - float(created_at_raw) > max_age:
-                        temp_dir = r.hget(key, "temp_dir")
+                        temp_dir = cast("str | None", r.hget(key, "temp_dir"))
                         r.delete(key)
                         if temp_dir:
                             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -227,9 +227,9 @@ def cleanup_stale(max_age: int = 1800) -> None:
 
     for tid in stale_ids:
         with _lock:
-            task = _tasks.pop(tid, None)
-        if task and task.temp_dir:
-            shutil.rmtree(task.temp_dir, ignore_errors=True)
+            removed_task: DownloadTask | None = _tasks.pop(tid, None)
+        if removed_task and removed_task.temp_dir:
+            shutil.rmtree(removed_task.temp_dir, ignore_errors=True)
             logger.info(f"Cleaned up stale in-memory task {tid}")
 
 

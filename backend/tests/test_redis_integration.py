@@ -1,8 +1,6 @@
 """Tests for Redis connection module."""
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestRedisModule:
     def test_is_redis_available_false_when_disabled(self) -> None:
@@ -49,6 +47,7 @@ class TestRedisModule:
 
     def test_close_redis_clears_clients(self) -> None:
         import asyncio
+
         from app.core import redis as redis_mod
 
         async def _noop() -> None:
