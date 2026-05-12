@@ -47,6 +47,26 @@ class TestRedisModule:
             redis_mod.init_redis()
             assert redis_mod._redis_available is False
 
+    def test_close_redis_clears_clients(self) -> None:
+        import asyncio
+        from app.core import redis as redis_mod
+
+        async def _noop() -> None:
+            pass
+
+        mock_sync = MagicMock()
+        mock_async = MagicMock()
+        mock_async.aclose = MagicMock(return_value=_noop())
+
+        redis_mod._sync_client = mock_sync
+        redis_mod._async_client = mock_async
+        redis_mod._redis_available = True
+
+        asyncio.run(redis_mod.close_redis())
+
+        assert redis_mod._sync_client is None
+        assert redis_mod._async_client is None
+
 
 class TestRedisDownloadTasks:
     def setup_method(self) -> None:

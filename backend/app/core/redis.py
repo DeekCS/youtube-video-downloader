@@ -53,7 +53,7 @@ def init_redis() -> None:
             _redis_available = False
 
 
-def close_redis() -> None:
+async def close_redis() -> None:
     """Close Redis connections. Called at app shutdown."""
     global _sync_client, _async_client
 
@@ -66,10 +66,7 @@ def close_redis() -> None:
 
     if _async_client is not None:
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if not loop.is_closed():
-                loop.run_until_complete(_async_client.aclose())
+            await _async_client.aclose()
         except Exception:
             pass
         _async_client = None
