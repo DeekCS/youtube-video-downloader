@@ -980,6 +980,8 @@ class YtDlpService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download timed out (1-hour limit)"
+            from app.services.download_tasks import update_task as _update_task
+            _update_task(task.task_id, status="failed", error="Download timed out (1-hour limit)")
             return
 
         reader.join(timeout=5)
