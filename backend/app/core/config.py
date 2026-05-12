@@ -171,6 +171,16 @@ class Settings(BaseSettings):
         description="Max number of cached URLs (0 disables)"
     )
 
+    # Redis
+    REDIS_URL: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL (redis://host:port/db)",
+    )
+    REDIS_ENABLED: bool = Field(
+        default=True,
+        description="Set False to skip Redis and use in-memory fallback",
+    )
+
 
 # Global settings instance
 settings = Settings()
