@@ -143,7 +143,9 @@ export function FileDrop() {
     let taskId: string
     let filename: string
     try {
-      ;({ taskId, filename } = await startConversion(file, targetFormat))
+      ;({ taskId, filename } = await startConversion(file, targetFormat, (pct) => {
+        setState({ stage: 'uploading', progress: pct, label: `Uploading ${file.name}… ${pct}%` })
+      }))
     } catch (err) {
       setState({ stage: 'failed', progress: 0, label: '', error: getErrorMessage(err) })
       return
@@ -307,18 +309,11 @@ export function FileDrop() {
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">{state.label}</span>
-            {state.stage === 'converting' && (
+            {state.progress > 0 && (
               <span className="text-muted-foreground">{Math.round(state.progress)}%</span>
             )}
           </div>
-          {state.stage === 'uploading' ? (
-            /* indeterminate — pulse the full bar */
-            <div className="h-2 w-full rounded-full bg-primary/20 overflow-hidden">
-              <div className="h-full w-full bg-primary animate-pulse" />
-            </div>
-          ) : (
-            <Progress value={state.progress} className="h-2" />
-          )}
+          <Progress value={state.progress} className="h-2" />
         </div>
       )}
 

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from urllib.parse import quote
@@ -22,6 +23,7 @@ from app.services.download_tasks import (
     create_task,
     get_task,
     remove_task,
+    update_task,
 )
 
 logger = get_logger(__name__)
@@ -136,8 +138,7 @@ def _run_ffmpeg_conversion(
     ffmpeg_args: list[str],
 ) -> None:
     """Run ffmpeg in a background thread and update task progress via out_time_ms."""
-    task = get_task(task_id)
-    if task is None:
+    if get_task(task_id) is None:
         return
 
     duration_s = _probe_duration(input_path)
@@ -160,6 +161,8 @@ def _run_ffmpeg_conversion(
             text=True,
         )
 
+        _last_flush = [0.0]
+
         for line in proc.stdout:  # type: ignore[union-attr]
             line = line.strip()
             if line.startswith("out_time_ms="):
@@ -168,9 +171,10 @@ def _run_ffmpeg_conversion(
                     current_s = ms / 1_000_000
                     if duration_s > 0:
                         pct = min(99.0, (current_s / duration_s) * 100)
-                        task.progress = pct
-                        task.status = "converting"
-                        task.phase = "converting"
+                        now = time.monotonic()
+                        if now - _last_flush[0] >= 1.0:
+                            update_task(task_id, status="converting", phase="converting", progress=pct)
+                            _last_flush[0] = now
                 except ValueError:
                     pass
             elif line == "progress=end":
@@ -181,24 +185,24 @@ def _run_ffmpeg_conversion(
         if proc.returncode != 0:
             stderr_out = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
             logger.error("ffmpeg failed for task %s: %s", task_id, stderr_out[:500])
-            task.status = "failed"
-            task.error = "Conversion failed"
+            update_task(task_id, status="failed", error="Conversion failed")
             return
 
-        task.status = "completed"
-        task.progress = 100.0
-        task.file_path = output_path
-        task.file_size = os.path.getsize(output_path)
+        update_task(
+            task_id,
+            status="completed",
+            progress=100.0,
+            file_path=output_path,
+            file_size=os.path.getsize(output_path),
+        )
 
     except subprocess.TimeoutExpired:
         if proc:
             proc.kill()
-        task.status = "failed"
-        task.error = "Conversion timed out"
+        update_task(task_id, status="failed", error="Conversion timed out")
     except Exception as exc:
         logger.exception("Conversion error for task %s: %s", task_id, exc)
-        task.status = "failed"
-        task.error = str(exc)
+        update_task(task_id, status="failed", error=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +293,9 @@ async def start_conversion(
     task = create_task(task_id, filename=out_filename, content_type=mime)
     task.temp_dir = temp_dir
     task.status = "pending"
+    # Persist temp_dir to Redis so the file-serve endpoint can clean up
+    # regardless of which worker handles the request.
+    update_task(task_id, temp_dir=temp_dir, status="pending")
 
     # --- launch conversion thread ---
     ffmpeg_args = OUTPUT_FORMATS[target_format]["ffmpeg_args"]
@@ -310,8 +317,8 @@ async def conversion_progress(request: Request, task_id: str) -> EventSourceResp
     """Stream conversion progress events (same schema as download progress SSE)."""
     try:
         uuid.UUID(task_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid task ID")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid task ID") from exc
 
     task = get_task(task_id)
     if not task:
@@ -363,8 +370,8 @@ async def get_converted_file(task_id: str) -> StreamingResponse:
     """Serve the completed converted file and clean up temp files after streaming."""
     try:
         uuid.UUID(task_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid task ID")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid task ID") from exc
 
     task = get_task(task_id)
     if not task:

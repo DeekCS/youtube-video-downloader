@@ -262,33 +262,57 @@ const StartConversionResponseSchema = z.object({
 
 /**
  * Upload a local file for conversion and return a task ID for progress tracking.
+ * Reports real upload progress via onUploadProgress (0–100).
  */
 export async function startConversion(
   file: File,
   targetFormat: string,
+  onUploadProgress?: (pct: number) => void,
 ): Promise<{ taskId: string; filename: string }> {
   const body = new FormData()
   body.append('file', file)
   body.append('target_format', targetFormat)
 
-  const response = await fetch(`${env.API_BASE}/convert/start`, {
-    method: 'POST',
-    body,
-  })
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${env.API_BASE}/convert/start`)
 
-  const data: unknown = await response.json()
-
-  if (!response.ok) {
-    const parsed = ErrorResponseSchema.safeParse(data)
-    if (parsed.success) {
-      throw new ApiError(parsed.data.code, parsed.data.message, response.status)
+    if (onUploadProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          onUploadProgress(Math.round((e.loaded / e.total) * 100))
+        }
+      }
     }
-    const detail = (data as { detail?: string })?.detail
-    throw new ApiError('INTERNAL_ERROR', detail ?? 'Failed to start conversion', response.status)
-  }
 
-  const ok = StartConversionResponseSchema.parse(data)
-  return { taskId: ok.task_id, filename: ok.filename }
+    xhr.onload = () => {
+      let data: unknown
+      try { data = JSON.parse(xhr.responseText) } catch { data = {} }
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const parsed = ErrorResponseSchema.safeParse(data)
+        if (parsed.success) {
+          reject(new ApiError(parsed.data.code, parsed.data.message, xhr.status))
+          return
+        }
+        const detail = (data as { detail?: string })?.detail
+        reject(new ApiError('INTERNAL_ERROR', detail ?? 'Failed to start conversion', xhr.status))
+        return
+      }
+
+      try {
+        const ok = StartConversionResponseSchema.parse(data)
+        resolve({ taskId: ok.task_id, filename: ok.filename })
+      } catch {
+        reject(new ApiError('INTERNAL_ERROR', 'Invalid response from server'))
+      }
+    }
+
+    xhr.onerror = () => reject(new ApiError('INTERNAL_ERROR', 'Network error during upload'))
+    xhr.ontimeout = () => reject(new ApiError('INTERNAL_ERROR', 'Upload timed out'))
+    xhr.timeout = 30 * 60 * 1000 // 30 minutes for large files
+    xhr.send(body)
+  })
 }
 
 /**
