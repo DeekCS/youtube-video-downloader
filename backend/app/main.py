@@ -26,28 +26,24 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application lifespan events.
+    """Application lifespan events."""
+    from app.core.redis import close_redis, init_redis
 
-    Args:
-        app: FastAPI application instance
-
-    Yields:
-        None
-    """
     # Startup
     logger.info(f"Starting application in {settings.ENV} mode")
     logger.info(f"API v1 prefix: {settings.API_V1_PREFIX}")
     logger.info(f"CORS origins: {settings.cors_origins_list}")
 
-    # Startup: clean up orphaned temp dirs from previous crashes
+    init_redis()
     _cleanup_orphaned_temp_dirs()
 
     yield
 
-    # Shutdown: cancel in-flight downloads and clean up temp dirs
+    # Shutdown
     logger.info("Shutting down application — cleaning up downloads…")
     cleanup_all()
     _cleanup_orphaned_temp_dirs()
+    await close_redis()
     logger.info("Shutdown complete")
 
 
