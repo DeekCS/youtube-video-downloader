@@ -226,7 +226,8 @@ def cleanup_stale(max_age: int = 1800) -> None:
                 stale_ids.append(tid)
 
     for tid in stale_ids:
-        task = remove_task(tid)
+        with _lock:
+            task = _tasks.pop(tid, None)
         if task and task.temp_dir:
             shutil.rmtree(task.temp_dir, ignore_errors=True)
             logger.info(f"Cleaned up stale in-memory task {tid}")
