@@ -14,9 +14,10 @@
 # Usage (from monorepo root):
 #   ./scripts/railway-set-env.sh
 #   RAILWAY_BACKEND_SERVICE=my-api RAILWAY_FRONTEND_SERVICE=my-web ./scripts/railway-set-env.sh
+#   RAILWAY_REDIS_REF=my-redis ./scripts/railway-set-env.sh   # if Railway Redis service isn't named "Redis"
 #
 # Service names are auto-detected from `railway status --json` (rootDirectory backend/frontend).
-# Override with RAILWAY_BACKEND_SERVICE / RAILWAY_FRONTEND_SERVICE if needed.
+# Override with RAILWAY_BACKEND_SERVICE / RAILWAY_FRONTEND_SERVICE / RAILWAY_REDIS_REF if needed.
 
 set -euo pipefail
 
@@ -43,6 +44,7 @@ railway variable set --skip-deploys -s "$BACKEND_SLUG" \
   LOG_LEVEL=INFO \
   BLOCK_PRIVATE_NETWORKS=true \
   ALLOWED_URL_SCHEMES=http,https \
+  REDIS_ENABLED=true \
   YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded \
   YTDLP_USE_IOS_CLIENT=false \
   YTDLP_CONCURRENT_FRAGMENTS=32 \
@@ -56,6 +58,13 @@ railway variable set --skip-deploys -s "$BACKEND_SLUG" \
 # Railway reference: ${{ ServiceName.RAILWAY_PUBLIC_DOMAIN }} (ServiceName must match dashboard)
 CORS_VALUE='CORS_ORIGINS=https://${{'"${FRONTEND_REF}"'.RAILWAY_PUBLIC_DOMAIN}}'
 railway variable set --skip-deploys -s "$BACKEND_SLUG" "$CORS_VALUE"
+
+# Redis URL — variable reference to the Railway Redis service.
+# Add Redis via Railway dashboard "+ New → Database → Redis" before running this.
+# Replace "Redis" in REDIS_REF if your Railway Redis service has a different name.
+REDIS_REF="${RAILWAY_REDIS_REF:-Redis}"
+REDIS_URL_VALUE='REDIS_URL=${{'"${REDIS_REF}"'.REDIS_URL}}'
+railway variable set --skip-deploys -s "$BACKEND_SLUG" "$REDIS_URL_VALUE"
 
 railway variable set --skip-deploys -s "$FRONTEND_SLUG" \
   'NEXT_PUBLIC_API_BASE=https://${{'"${BACKEND_REF}"'.RAILWAY_PUBLIC_DOMAIN}}/api/v1'

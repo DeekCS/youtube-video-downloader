@@ -57,7 +57,22 @@ Railway auto-detects the `railway.toml` in each service's root directory and pas
 
 Example: `https://backend-production-abc123.up.railway.app`
 
-### 2.4 Configure Backend Environment Variables
+### 2.4 Add Redis Service
+
+The backend uses Redis for shared task state across workers and format caching. Add a managed Redis instance to your Railway project:
+
+1. In your Railway project, click **"+ New"** → **"Database"** → **"Add Redis"**
+2. Railway provisions a Redis instance and exposes a `REDIS_URL` variable automatically
+3. In the **Backend** service → **Variables**, add a [variable reference](https://docs.railway.app/guides/variables#referencing-another-services-variable):
+   ```env
+   REDIS_URL=${{Redis.REDIS_URL}}
+   REDIS_ENABLED=true
+   ```
+   > Replace `Redis` with whatever Railway named your Redis service (check the service panel — it's usually `Redis`).
+
+If you skip this step the backend falls back to in-memory state automatically, but **multiple replicas will not share task state**.
+
+### 2.5 Configure Backend Environment Variables
 
 Go to the Backend service **Variables** tab and add:
 
@@ -67,6 +82,8 @@ API_V1_PREFIX=/api/v1
 LOG_LEVEL=INFO
 BLOCK_PRIVATE_NETWORKS=true
 ALLOWED_URL_SCHEMES=http,https
+REDIS_ENABLED=true
+REDIS_URL=${{Redis.REDIS_URL}}
 ```
 
 **yt-dlp / YouTube (optional but recommended):** The backend defaults in code already use `YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded` (avoids “Requested format is not available” when the iOS client is used without a PO token). You do **not** have to set anything for basic YouTube support.
@@ -100,11 +117,12 @@ If you don't want to use variable references, set it manually after deploying th
 CORS_ORIGINS=https://your-frontend-url.up.railway.app
 ```
 
-### 2.5 Verify Backend Deployment
+### 2.6 Verify Backend Deployment
 
 1. Wait for the build and deployment to complete
 2. Visit `https://your-backend-url.up.railway.app/health`
-   - Should return: `{"status": "healthy", "version": "0.1.0"}`
+   - Should return: `{"status": "healthy", "version": "0.1.0", "ffmpeg_ok": true, "yt_dlp_cli_ok": true, "redis_ok": true}`
+   - If `redis_ok` is `false`, check that `REDIS_URL` is set correctly in the Backend variables
 3. Visit `https://your-backend-url.up.railway.app/docs`
    - Should show FastAPI Swagger UI
 
@@ -171,6 +189,8 @@ Example: `https://frontend-production-xyz789.up.railway.app`
 | Backend  | `LOG_LEVEL` | `INFO` |
 | Backend  | `BLOCK_PRIVATE_NETWORKS` | `true` |
 | Backend  | `ALLOWED_URL_SCHEMES` | `http,https` |
+| Backend  | `REDIS_URL` | `${{Redis.REDIS_URL}}` (variable reference to Railway Redis service) |
+| Backend  | `REDIS_ENABLED` | `true` |
 | Backend  | `YTDLP_YOUTUBE_PLAYER_CLIENT` | `tv_embedded` (optional; same default in app code) |
 | Frontend | `NEXT_PUBLIC_API_BASE` | `https://${{Backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1` |
 
@@ -228,6 +248,7 @@ Example: `https://frontend-production-xyz789.up.railway.app`
 | Problem | Solution |
 |---------|----------|
 | `/health` returns 502 or timeout | Check Backend logs for startup errors; ensure Dockerfile builds successfully |
+| `redis_ok: false` in `/health` | Add Redis service in Railway ("+ New" → Database → Redis) and set `REDIS_URL=${{Redis.REDIS_URL}}` + `REDIS_ENABLED=true` in Backend variables |
 | CORS errors in browser console | Verify `CORS_ORIGINS` matches the Frontend domain exactly (include `https://`) |
 | yt-dlp fails with "command not found" | Ensure the Dockerfile installs yt-dlp correctly (it's included in the provided Dockerfile) |
 | `FORMAT_NOT_AVAILABLE` / "Requested format is not available" (YouTube) | Do **not** set `player_client=ios` without a PO token. Keep `YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded` (default in code) or leave unset. See [PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). |
@@ -336,6 +357,7 @@ railway variable set --skip-deploys -s Backend \
   LOG_LEVEL=INFO \
   BLOCK_PRIVATE_NETWORKS=true \
   ALLOWED_URL_SCHEMES=http,https \
+  REDIS_ENABLED=true \
   YTDLP_YOUTUBE_PLAYER_CLIENT=tv_embedded \
   YTDLP_USE_IOS_CLIENT=false \
   YTDLP_CONCURRENT_FRAGMENTS=32 \
@@ -348,6 +370,11 @@ railway variable set --skip-deploys -s Backend \
 
 railway variable set --skip-deploys -s Backend \
   'CORS_ORIGINS=https://${{Frontend.RAILWAY_PUBLIC_DOMAIN}}'
+
+# REDIS_URL — variable reference to your Railway Redis service (add Redis via "+ New → Database → Redis" first)
+# Replace "Redis" with the actual Railway service name shown in the dashboard if it differs.
+railway variable set --skip-deploys -s Backend \
+  'REDIS_URL=${{Redis.REDIS_URL}}'
 ```
 
 **Frontend:**
