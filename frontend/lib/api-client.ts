@@ -77,25 +77,27 @@ export class ApiError extends Error {
   }
 }
 
+const API_TIMEOUT_MS = 30_000
+
 /**
  * Fetch video formats from the backend.
  */
 export async function fetchFormats(url: string): Promise<VideoInfo> {
-  // Validate input
   const validatedInput = FormatsRequestSchema.parse({ url })
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
 
   try {
     const response = await fetch(`${env.API_BASE}/videos/formats`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: validatedInput.url }),
+      signal: controller.signal,
     })
 
     const data = await response.json()
 
-    // Handle error responses
     if (!response.ok) {
       const errorData = ErrorResponseSchema.safeParse(data)
       if (errorData.success) {
@@ -104,25 +106,19 @@ export async function fetchFormats(url: string): Promise<VideoInfo> {
       throw new ApiError('INTERNAL_ERROR', 'An unexpected error occurred', response.status)
     }
 
-    // Validate and parse successful response
     return VideoInfoSchema.parse(data)
   } catch (error) {
-    // Re-throw ApiError as-is
-    if (error instanceof ApiError) {
-      throw error
-    }
-
-    // Re-throw zod validation errors as ApiError
+    if (error instanceof ApiError) throw error
     if (error instanceof z.ZodError) {
       throw new ApiError('INTERNAL_ERROR', 'Invalid response from server')
     }
-
-    // Network or other errors
-    if (error instanceof Error) {
-      throw new ApiError('INTERNAL_ERROR', error.message)
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('INTERNAL_ERROR', 'Request timed out after 30 seconds')
     }
-
+    if (error instanceof Error) throw new ApiError('INTERNAL_ERROR', error.message)
     throw new ApiError('INTERNAL_ERROR', 'An unexpected error occurred')
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 
@@ -170,26 +166,39 @@ export async function startDownload(
     format_id: formatId.trim(),
   })
 
-  const response = await fetch(`${env.API_BASE}/videos/download/start`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ url: payload.url, format_id: payload.format_id }),
-  })
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
 
-  const data: unknown = await response.json()
+  try {
+    const response = await fetch(`${env.API_BASE}/videos/download/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: payload.url, format_id: payload.format_id }),
+      signal: controller.signal,
+    })
 
-  if (!response.ok) {
-    const parsed = ErrorResponseSchema.safeParse(data)
-    if (parsed.success) {
-      throw new ApiError(parsed.data.code, parsed.data.message, response.status)
+    const data: unknown = await response.json()
+
+    if (!response.ok) {
+      const parsed = ErrorResponseSchema.safeParse(data)
+      if (parsed.success) {
+        throw new ApiError(parsed.data.code, parsed.data.message, response.status)
+      }
+      throw new ApiError('INTERNAL_ERROR', 'Failed to start download', response.status)
     }
-    throw new ApiError('INTERNAL_ERROR', 'Failed to start download', response.status)
-  }
 
-  const ok = StartDownloadResponseSchema.parse(data)
-  return { downloadId: ok.download_id, filename: ok.filename }
+    const ok = StartDownloadResponseSchema.parse(data)
+    return { downloadId: ok.download_id, filename: ok.filename }
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('INTERNAL_ERROR', 'Request timed out after 30 seconds')
+    }
+    if (error instanceof Error) throw new ApiError('INTERNAL_ERROR', error.message)
+    throw new ApiError('INTERNAL_ERROR', 'An unexpected error occurred')
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 /**
@@ -225,6 +234,97 @@ export function subscribeToProgress(
     consecutiveErrors = 0
   }
 
+  es.onerror = () => {
+    consecutiveErrors += 1
+    if (consecutiveErrors >= maxTransientErrors) {
+      es.close()
+      onConnectionError()
+    }
+  }
+
+  return () => {
+    es.removeEventListener('progress', onMessage as EventListener)
+    es.close()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Conversion API
+// ---------------------------------------------------------------------------
+
+const StartConversionResponseSchema = z.object({
+  task_id: z.string(),
+  filename: z.string(),
+})
+
+/**
+ * Upload a local file for conversion and return a task ID for progress tracking.
+ */
+export async function startConversion(
+  file: File,
+  targetFormat: string,
+): Promise<{ taskId: string; filename: string }> {
+  const body = new FormData()
+  body.append('file', file)
+  body.append('target_format', targetFormat)
+
+  const response = await fetch(`${env.API_BASE}/convert/start`, {
+    method: 'POST',
+    body,
+  })
+
+  const data: unknown = await response.json()
+
+  if (!response.ok) {
+    const parsed = ErrorResponseSchema.safeParse(data)
+    if (parsed.success) {
+      throw new ApiError(parsed.data.code, parsed.data.message, response.status)
+    }
+    const detail = (data as { detail?: string })?.detail
+    throw new ApiError('INTERNAL_ERROR', detail ?? 'Failed to start conversion', response.status)
+  }
+
+  const ok = StartConversionResponseSchema.parse(data)
+  return { taskId: ok.task_id, filename: ok.filename }
+}
+
+/**
+ * Build the URL to fetch a completed converted file.
+ */
+export function buildConversionFileUrl(taskId: string): string {
+  return `${env.API_BASE}/convert/${taskId}/file`
+}
+
+/**
+ * Subscribe to SSE progress events for a conversion task.
+ * Uses the same event schema as subscribeToProgress.
+ */
+export function subscribeToConversionProgress(
+  taskId: string,
+  onProgress: (progress: DownloadProgress) => void,
+  onConnectionError: () => void,
+): () => void {
+  const url = `${env.API_BASE}/convert/${taskId}/progress`
+  const es = new EventSource(url)
+
+  let consecutiveErrors = 0
+  const maxTransientErrors = 4
+
+  const onMessage = (e: MessageEvent) => {
+    try {
+      const raw = JSON.parse(e.data as string) as unknown
+      const parsed = DownloadProgressSchema.safeParse(raw)
+      if (parsed.success) {
+        consecutiveErrors = 0
+        onProgress(parsed.data)
+      }
+    } catch {
+      // ignore malformed chunks
+    }
+  }
+
+  es.addEventListener('progress', onMessage as EventListener)
+  es.onopen = () => { consecutiveErrors = 0 }
   es.onerror = () => {
     consecutiveErrors += 1
     if (consecutiveErrors >= maxTransientErrors) {
