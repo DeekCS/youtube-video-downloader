@@ -14,8 +14,8 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_sync_client: redis.Redis | None = None  # type: ignore[type-arg]
-_async_client: aioredis.Redis | None = None  # type: ignore[type-arg]
+_sync_client: redis.Redis | None = None
+_async_client: aioredis.Redis | None = None
 _redis_available: bool = False
 _init_lock = threading.Lock()
 
@@ -30,7 +30,7 @@ def init_redis() -> None:
 
     with _init_lock:
         try:
-            client: redis.Redis = redis.Redis.from_url(  # type: ignore[type-arg]
+            client: redis.Redis = redis.Redis.from_url(
                 settings.REDIS_URL,
                 decode_responses=True,
                 socket_connect_timeout=2,
@@ -80,6 +80,6 @@ def is_redis_available() -> bool:
     return _redis_available and _sync_client is not None
 
 
-def get_sync_redis() -> "redis.Redis | None":  # type: ignore[type-arg]
+def get_sync_redis() -> redis.Redis | None:
     """Return the sync Redis client, or None if unavailable."""
     return _sync_client if _redis_available else None
