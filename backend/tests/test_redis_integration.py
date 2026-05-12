@@ -46,3 +46,66 @@ class TestRedisModule:
             redis_mod._sync_client = None
             redis_mod.init_redis()
             assert redis_mod._redis_available is False
+
+
+class TestRedisDownloadTasks:
+    def setup_method(self) -> None:
+        """Reset in-memory state before each test."""
+        import app.services.download_tasks as dt
+        with dt._lock:
+            dt._tasks.clear()
+
+    def test_create_task_returns_dataclass(self) -> None:
+        import app.services.download_tasks as dt
+        from app.core import redis as redis_mod
+        redis_mod._redis_available = False  # force in-memory
+
+        task = dt.create_task("t1", filename="x.mp4")
+        assert task.task_id == "t1"
+        assert task.filename == "x.mp4"
+        assert task.status == "pending"
+
+    def test_update_task_changes_in_memory_fields(self) -> None:
+        import app.services.download_tasks as dt
+        from app.core import redis as redis_mod
+        redis_mod._redis_available = False
+
+        dt.create_task("t2")
+        dt.update_task("t2", status="downloading", progress=50.0)
+        task = dt.get_task("t2")
+        assert task is not None
+        assert task.status == "downloading"
+        assert task.progress == 50.0
+
+    def test_get_task_returns_none_for_missing(self) -> None:
+        import app.services.download_tasks as dt
+        from app.core import redis as redis_mod
+        redis_mod._redis_available = False
+
+        assert dt.get_task("does-not-exist") is None
+
+    def test_remove_task_deletes_from_store(self) -> None:
+        import app.services.download_tasks as dt
+        from app.core import redis as redis_mod
+        redis_mod._redis_available = False
+
+        dt.create_task("t3")
+        removed = dt.remove_task("t3")
+        assert removed is not None
+        assert dt.get_task("t3") is None
+
+    def test_update_task_writes_to_redis_when_available(self) -> None:
+        import app.services.download_tasks as dt
+        from app.core import redis as redis_mod
+
+        mock_redis = MagicMock()
+        redis_mod._sync_client = mock_redis
+        redis_mod._redis_available = True
+
+        try:
+            dt.create_task("t4")
+            dt.update_task("t4", status="downloading")
+            mock_redis.hset.assert_called()
+        finally:
+            redis_mod._redis_available = False
+            redis_mod._sync_client = None

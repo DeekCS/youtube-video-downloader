@@ -20,11 +20,13 @@ class TestDownloadTasks:
         assert dt.get_task("rm-me") is None
 
     def test_cleanup_stale_removes_old_tasks(self, tmp_path: object) -> None:
+        from app.core import redis as redis_mod
+        redis_mod._redis_available = False  # force in-memory for this test
+
         tid = "stale-1"
-        task = dt.create_task(tid)
-        # Force age without sleeping 30 minutes: patch created_at
-        task.created_at = time.time() - 4000
-        task.temp_dir = str(tmp_path)
+        dt.create_task(tid)
+        # Use update_task instead of direct field mutation (works with Redis backend)
+        dt.update_task(tid, created_at=time.time() - 4000, temp_dir=str(tmp_path))
 
         dt.cleanup_stale(max_age=3600)
 
