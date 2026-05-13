@@ -431,11 +431,15 @@ class YtDlpService:
         vid = info.get("id")
         video_id = str(vid) if vid is not None else None
 
+        raw_platform = info.get("extractor_key") or info.get("extractor") or None
+        platform = raw_platform.split(":")[0].strip() if raw_platform else None
+
         return VideoInfo(
             title=title,
             thumbnail_url=thumbnail,
             duration_seconds=duration,
             video_id=video_id,
+            platform=platform,
             formats=all_formats,
         )
 
