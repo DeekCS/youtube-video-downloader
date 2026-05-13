@@ -107,6 +107,59 @@ class TestFetchFormats:
         with pytest.raises((VideoNotFoundError, YtdlpFailedError)):
             YtDlpService.fetch_formats("https://www.youtube.com/watch?v=invalid")
 
+    @patch("app.services.yt_dlp_service.yt_dlp.YoutubeDL")
+    def test_fetch_formats_includes_platform(self, mock_ydl_class: MagicMock) -> None:
+        """Test that VideoInfo includes platform from extractor_key."""
+        mock_info = {
+            "title": "Test Video",
+            "thumbnail": None,
+            "duration": 60,
+            "extractor_key": "Youtube",
+            "formats": [
+                {
+                    "format_id": "22",
+                    "ext": "mp4",
+                    "height": 720,
+                    "vcodec": "avc1",
+                    "acodec": "mp4a",
+                    "filesize": 1000,
+                }
+            ],
+        }
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        result = YtDlpService.fetch_formats("https://www.youtube.com/watch?v=test")
+
+        assert result.platform == "Youtube"
+
+    @patch("app.services.yt_dlp_service.yt_dlp.YoutubeDL")
+    def test_fetch_formats_platform_none_when_missing(self, mock_ydl_class: MagicMock) -> None:
+        """Test that platform is None when extractor_key is absent."""
+        mock_info = {
+            "title": "Test Video",
+            "thumbnail": None,
+            "duration": 60,
+            "formats": [
+                {
+                    "format_id": "22",
+                    "ext": "mp4",
+                    "height": 720,
+                    "vcodec": "avc1",
+                    "acodec": "mp4a",
+                    "filesize": 1000,
+                }
+            ],
+        }
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        result = YtDlpService.fetch_formats("https://www.youtube.com/watch?v=test")
+
+        assert result.platform is None
+
 
 class TestBuildDownloadCommand:
     """Tests for download command construction (single-stream only)."""

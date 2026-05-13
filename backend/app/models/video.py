@@ -116,6 +116,10 @@ class VideoInfo(BaseModel):
         default=None,
         description="Platform-specific video identifier when available (e.g. YouTube id)",
     )
+    platform: str | None = Field(
+        default=None,
+        description="Platform name as reported by yt-dlp (e.g. 'Youtube', 'TikTok', 'Vimeo')",
+    )
     formats: list[Format] = Field(
         ...,
         description="List of available formats",
@@ -128,6 +132,7 @@ class VideoInfo(BaseModel):
                 "title": "Example Video Title",
                 "thumbnail_url": "https://example.com/thumb.jpg",
                 "duration_seconds": 180,
+                "platform": "Youtube",
                 "formats": [
                     {
                         "id": "22",
