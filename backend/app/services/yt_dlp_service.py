@@ -431,7 +431,7 @@ class YtDlpService:
         vid = info.get("id")
         video_id = str(vid) if vid is not None else None
 
-        raw_platform = info.get("extractor_key") or info.get("extractor") or None
+        raw_platform = info.get("extractor_key") or info.get("extractor")
         platform = raw_platform.split(":")[0].strip() if raw_platform else None
 
         return VideoInfo(

@@ -33,6 +33,7 @@ class TestNormalizeUrl:
             YtDlpService.normalize_url("http://192.168.1.1/video")
 
 
+@pytest.mark.usefixtures("clear_formats_cache")
 class TestFetchFormats:
     """Tests for fetching video formats."""
 
@@ -159,6 +160,60 @@ class TestFetchFormats:
         result = YtDlpService.fetch_formats("https://www.youtube.com/watch?v=test")
 
         assert result.platform is None
+
+    @patch("app.services.yt_dlp_service.yt_dlp.YoutubeDL")
+    def test_fetch_formats_strips_playlist_suffix(self, mock_ydl_class: MagicMock) -> None:
+        """Test that platform strips :playlist suffix from extractor_key."""
+        mock_info = {
+            "title": "Test Playlist",
+            "thumbnail": None,
+            "duration": 60,
+            "extractor_key": "Youtube:playlist",
+            "formats": [
+                {
+                    "format_id": "22",
+                    "ext": "mp4",
+                    "height": 720,
+                    "vcodec": "avc1",
+                    "acodec": "mp4a",
+                    "filesize": 1000,
+                }
+            ],
+        }
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        result = YtDlpService.fetch_formats("https://www.youtube.com/playlist?list=test")
+
+        assert result.platform == "Youtube"
+
+    @patch("app.services.yt_dlp_service.yt_dlp.YoutubeDL")
+    def test_fetch_formats_falls_back_to_extractor(self, mock_ydl_class: MagicMock) -> None:
+        """Test that platform falls back to extractor when extractor_key is missing."""
+        mock_info = {
+            "title": "Test Video",
+            "thumbnail": None,
+            "duration": 60,
+            "extractor": "Vimeo",
+            "formats": [
+                {
+                    "format_id": "22",
+                    "ext": "mp4",
+                    "height": 720,
+                    "vcodec": "avc1",
+                    "acodec": "mp4a",
+                    "filesize": 1000,
+                }
+            ],
+        }
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        result = YtDlpService.fetch_formats("https://vimeo.com/123456")
+
+        assert result.platform == "Vimeo"
 
 
 class TestBuildDownloadCommand:
