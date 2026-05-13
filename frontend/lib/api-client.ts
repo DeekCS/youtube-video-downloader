@@ -30,6 +30,7 @@ export const VideoInfoSchema = z.object({
   thumbnail_url: z.string().nullable(),
   duration_seconds: z.number().nullable(),
   video_id: z.string().nullable().optional(),
+  platform: z.string().nullable().optional(),
   formats: z.array(FormatSchema),
 })
 
