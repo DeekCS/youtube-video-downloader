@@ -273,8 +273,8 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
           <div className="flex flex-wrap items-start justify-center sm:justify-start gap-2 mb-1 sm:mb-2">
             <h2 className="text-lg sm:text-xl font-semibold break-words">{videoInfo.title}</h2>
             {videoInfo.platform && (
-              <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-xs rounded-full px-2 py-0.5 shrink-0 mt-0.5 sm:mt-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" />
+              <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-xs rounded-full px-2 py-0.5 shrink-0 mt-0.5 sm:mt-1" aria-label={`Platform: ${videoInfo.platform}`}>
+                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-60" aria-hidden="true" />
                 {videoInfo.platform}
               </span>
             )}
