@@ -261,39 +261,45 @@ class TestMergedFormatSelectors:
                    filesize_bytes=5000000, is_audio_only=True, is_video_only=False),
         ]
 
-    def test_no_bare_best_fallback(self) -> None:
-        """Merged format IDs must NEVER contain a bare '/best' without codec filter."""
-        formats = self._get_sample_formats()
-        merged = YtDlpService._create_merged_formats(formats)
-
-        for fmt in merged:
-            # Split on '/' to get each fallback tier
-            tiers = fmt.id.split("/")
-            for tier in tiers:
-                tier_stripped = tier.strip()
-                # A bare "best" or "best[height<=N]" without vcodec constraint
-                if tier_stripped == "best" or (
-                    tier_stripped.startswith("best[height<=")
-                    and "vcodec" not in tier_stripped
-                ):
-                    pytest.fail(
-                        f"Format '{fmt.quality_label}' has bare fallback "
-                        f"'{tier_stripped}' which can select VP9. "
-                        f"Full ID: {fmt.id}"
-                    )
-
-    def test_all_selectors_prefer_avc(self) -> None:
-        """Every fallback tier in merged selectors must reference avc."""
+    def test_avc_tiers_come_before_vp9_fallback(self) -> None:
+        """AVC (H.264) tiers must appear before the codec-agnostic fallback tiers."""
         formats = self._get_sample_formats()
         merged = YtDlpService._create_merged_formats(formats)
 
         for fmt in merged:
             tiers = fmt.id.split("/")
-            for tier in tiers:
-                assert "avc" in tier.lower(), (
-                    f"Tier '{tier}' in '{fmt.quality_label}' does not "
-                    f"constrain to H.264 (avc). Full ID: {fmt.id}"
+            last_avc_index = -1
+            first_fallback_index = len(tiers)
+            for i, tier in enumerate(tiers):
+                t = tier.strip()
+                if "avc" in t.lower():
+                    last_avc_index = i
+                # codec-agnostic fallback tiers have no vcodec filter
+                if "vcodec" not in t and "bestvideo" in t:
+                    first_fallback_index = min(first_fallback_index, i)
+            if last_avc_index != -1 and first_fallback_index < len(tiers):
+                assert last_avc_index < first_fallback_index, (
+                    f"In '{fmt.quality_label}', AVC tier at index {last_avc_index} "
+                    f"comes after VP9-fallback tier at index {first_fallback_index}. "
+                    f"Full ID: {fmt.id}"
                 )
+
+    def test_vp9_fallback_present_in_all_merged_selectors(self) -> None:
+        """Every merged selector must include a codec-agnostic fallback for VP9-only platforms."""
+        formats = self._get_sample_formats()
+        merged = YtDlpService._create_merged_formats(formats)
+
+        for fmt in merged:
+            tiers = fmt.id.split("/")
+            has_fallback = any(
+                "vcodec" not in t.strip() and "bestvideo" in t.strip()
+                for t in tiers
+            )
+            assert has_fallback, (
+                f"Format '{fmt.quality_label}' has no codec-agnostic fallback "
+                f"tier — VP9-only platforms (Instagram, etc.) will fail. "
+                f"Full ID: {fmt.id}"
+            )
 
     def test_merged_formats_generated_for_available_heights(self) -> None:
         """Merged formats are created for heights present in raw formats."""

@@ -286,9 +286,10 @@ class YtDlpService:
             and MIME_VIDEO_PREFIX in f.mime_type
         }
 
-        # Best-available merged option – stay within QuickTime-compatible
-        # codecs (H.264 video + AAC audio) only.  No bare "/best" fallback
-        # because it can pick VP9/Opus which QuickTime cannot play.
+        # Best-available merged option – prefer H.264+AAC (QuickTime/iOS
+        # compatible), then fall back to any video+audio for platforms that
+        # serve VP9-only streams (Instagram, some TikTok, etc.).
+        # --merge-output-format mp4 ensures VP9+M4A is still wrapped in MP4.
         merged_formats.append(Format(
             id=(
                 "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]"
@@ -296,6 +297,8 @@ class YtDlpService:
                 "/bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]"
                 "/best[vcodec^=avc1]"
                 "/best[vcodec^=avc]"
+                "/bestvideo+bestaudio"
+                "/best"
             ),
             quality_label="Best Available (Merged)",
             mime_type="video/mp4",
@@ -304,8 +307,8 @@ class YtDlpService:
             is_video_only=False,
         ))
 
-        # Resolution-specific merged formats – restrict to H.264 + AAC.
-        # No bare "/best[height<=N]" fallback (could yield VP9).
+        # Resolution-specific merged formats – prefer H.264+AAC, fall back
+        # to VP9/any codec so VP9-only platforms (Instagram, etc.) still work.
         for height, label, _fmt_id in MERGE_TIERS:
             if height in available_heights:
                 merged_formats.append(Format(
@@ -318,6 +321,8 @@ class YtDlpService:
                         f"+bestaudio[acodec^=mp4a]"
                         f"/best[height<={height}][vcodec^=avc1]"
                         f"/best[height<={height}][vcodec^=avc]"
+                        f"/bestvideo[height<={height}]+bestaudio"
+                        f"/best[height<={height}]"
                     ),
                     quality_label=f"{label} (Merged)",
                     mime_type="video/mp4",
@@ -865,7 +870,7 @@ class YtDlpService:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -992,6 +997,7 @@ class YtDlpService:
         reader.join(timeout=5)
 
         if return_code != 0:
+            stderr_output = process.stderr.read() if process.stderr else ""
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download failed"
@@ -999,6 +1005,7 @@ class YtDlpService:
             _update_task(task.task_id, status="failed", error="Download failed")
             logger.error(
                 f"Progress download failed ({return_code}) for {safe_url}"
+                + (f": {stderr_output.strip()}" if stderr_output.strip() else "")
             )
             return
 
@@ -1120,7 +1127,7 @@ class YtDlpService:
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -1201,6 +1208,7 @@ class YtDlpService:
         reader.join(timeout=5)
 
         if return_code != 0:
+            stderr_output = process.stderr.read() if process.stderr else ""
             shutil.rmtree(temp_dir, ignore_errors=True)
             task.status = "failed"
             task.error = "Download failed"
@@ -1208,6 +1216,7 @@ class YtDlpService:
             _update_task(task.task_id, status="failed", error="Download failed")
             logger.error(
                 f"Single-stream download failed ({return_code}) for {safe_url}"
+                + (f": {stderr_output.strip()}" if stderr_output.strip() else "")
             )
             return
 
