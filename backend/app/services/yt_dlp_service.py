@@ -334,6 +334,61 @@ class YtDlpService:
         return merged_formats
 
     @staticmethod
+    def _transcode_to_h264_if_needed(file_path: str) -> None:
+        """Transcode the file to H.264+AAC in-place if the video codec is not H.264.
+
+        This ensures QuickTime / Safari compatibility for VP9-only platforms like
+        Instagram. H.264 files are untouched (fast path). Runs ffprobe to detect
+        codec, then ffmpeg to transcode only when necessary.
+        """
+        try:
+            probe = subprocess.run(
+                [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    file_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            codec = probe.stdout.strip().lower()
+            if not codec or codec in ("h264", "avc1", "avc"):
+                return  # already QuickTime-compatible
+            logger.info(
+                f"Detected {codec} codec in {os.path.basename(file_path)}, "
+                "transcoding to H.264 for QuickTime compatibility"
+            )
+            base, ext = os.path.splitext(file_path)
+            tmp_out = f"{base}_h264{ext}"
+            result = subprocess.run(
+                [
+                    "ffmpeg", "-i", file_path,
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac", "-movflags", "faststart",
+                    "-y", tmp_out,
+                ],
+                capture_output=True,
+                timeout=3600,
+            )
+            if result.returncode == 0:
+                os.replace(tmp_out, file_path)
+                logger.info(
+                    f"Transcoded to H.264: {os.path.basename(file_path)}"
+                )
+            else:
+                logger.warning(
+                    f"H.264 transcode failed (rc={result.returncode}), "
+                    "keeping original file"
+                )
+                if os.path.exists(tmp_out):
+                    os.remove(tmp_out)
+        except Exception:
+            logger.exception("_transcode_to_h264_if_needed failed unexpectedly")
+
+    @staticmethod
     def _sort_formats(formats: list[Format]) -> None:
         """Sort formats in-place: merged first, then by quality descending."""
 
@@ -1022,6 +1077,13 @@ class YtDlpService:
 
         paths = [os.path.join(temp_dir, f) for f in files]
         actual_path = max(paths, key=os.path.getsize)
+
+        # For merged (two-stream) downloads, ensure H.264 so QuickTime can play.
+        # VP9-only platforms (Instagram, some TikTok) need transcoding; H.264
+        # files are detected and skipped instantly by ffprobe.
+        if is_two_stream:
+            cls._transcode_to_h264_if_needed(actual_path)
+
         task.file_path = actual_path
         task.temp_dir = temp_dir
         task.file_size = os.path.getsize(actual_path)
