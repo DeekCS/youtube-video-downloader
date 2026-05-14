@@ -30,9 +30,6 @@ RUN uv pip install --system --no-cache -e .
 ADD https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp /usr/local/bin/yt-dlp
 RUN chmod a+rx /usr/local/bin/yt-dlp
 
-# Ensure the Python yt-dlp package is also the latest
-RUN uv pip install --system --no-cache --upgrade yt-dlp
-
 # Copy application code
 COPY app ./app
 
