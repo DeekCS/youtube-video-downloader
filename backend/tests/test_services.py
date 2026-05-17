@@ -316,6 +316,54 @@ class TestFetchFormats:
                 "002 - Track Two.mp3",
             ]
 
+    @patch("app.services.yt_dlp_service.YtDlpService.download_to_directory")
+    @patch("app.services.yt_dlp_service.YtDlpService.fetch_playlist_info")
+    @patch("app.services.yt_dlp_service.tempfile.mkdtemp")
+    def test_download_playlist_to_zip_skips_unavailable_entries(
+        self,
+        mock_mkdtemp: MagicMock,
+        mock_fetch_playlist: MagicMock,
+        mock_download: MagicMock,
+        tmp_path,
+    ) -> None:
+        """A private playlist item should be skipped instead of failing the whole job."""
+        temp_dir = tmp_path / "playlist-skip"
+        mock_mkdtemp.return_value = str(temp_dir)
+        mock_fetch_playlist.return_value = PlaylistInfo(
+            title="Demo Playlist",
+            entry_count=3,
+            entries=[
+                PlaylistEntry(id="111", title="Track One", url="https://example.com/1"),
+                PlaylistEntry(id="222", title="[Private video]", url="https://example.com/2"),
+                PlaylistEntry(id="333", title="Track Three", url="https://example.com/3"),
+            ],
+        )
+
+        def _download_side_effect(url: str, format_id: str, output_dir: str, *, video_info=None):
+            if url.endswith("/2"):
+                raise VideoNotFoundError()
+            idx = "1" if url.endswith("/1") else "3"
+            path = Path(output_dir) / f"downloaded-{idx}.mp3"
+            path.write_bytes(b"test")
+            return str(path)
+
+        mock_download.side_effect = _download_side_effect
+
+        task = create_task("skip123", filename="Demo Playlist.zip")
+        YtDlpService.download_playlist_to_zip(
+            "https://soundcloud.com/user/sets/demo",
+            task,
+        )
+
+        assert task.status == "completed"
+        assert task.file_path is not None
+        assert task.completed_entries == 3
+        with zipfile.ZipFile(task.file_path) as zf:
+            assert sorted(zf.namelist()) == [
+                "001 - Track One.mp3",
+                "003 - Track Three.mp3",
+            ]
+
 
 class TestBuildDownloadCommand:
     """Tests for download command construction (single-stream only)."""

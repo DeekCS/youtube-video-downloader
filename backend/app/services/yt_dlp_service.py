@@ -763,6 +763,7 @@ class YtDlpService:
     def download_playlist_to_zip(cls, url: str, task: DownloadTask) -> None:
         """Download a playlist entry-by-entry and package it into a zip."""
         normalized_url = cls.normalize_url(url)
+        safe_url = cls._sanitize_url_for_logging(normalized_url)
         info = cls.fetch_playlist_info(normalized_url)
         temp_dir = tempfile.mkdtemp(prefix="ytdl_playlist_")
         tracks_dir = os.path.join(temp_dir, "tracks")
@@ -791,7 +792,6 @@ class YtDlpService:
 
             for index, entry in enumerate(info.entries, start=1):
                 task.current_entry = entry.title
-                task.completed_entries = index - 1
                 _update_task(
                     task.task_id,
                     status="downloading",
@@ -801,16 +801,44 @@ class YtDlpService:
                     current_entry=entry.title,
                 )
 
-                downloaded = cls.download_to_directory(
-                    entry.url or normalized_url,
-                    "best",
-                    tracks_dir,
-                )
+                try:
+                    downloaded = cls.download_to_directory(
+                        entry.url or normalized_url,
+                        "best",
+                        tracks_dir,
+                    )
+                except VideoNotFoundError as exc:
+                    logger.warning(
+                        "Skipping unavailable playlist entry %s from %s: %s",
+                        entry.title,
+                        safe_url,
+                        exc,
+                    )
+                    task.completed_entries = index
+                    _update_task(
+                        task.task_id,
+                        status="downloading",
+                        playlist_title=info.title,
+                        total_entries=info.entry_count,
+                        completed_entries=index,
+                        current_entry=entry.title,
+                    )
+                    continue
+
                 final_name = (
                     f"{index:03d} - {cls._sanitize_cli_filename(entry.title)}"
                     f"{os.path.splitext(downloaded)[1]}"
                 )
                 os.replace(downloaded, os.path.join(tracks_dir, final_name))
+                task.completed_entries = index
+                _update_task(
+                    task.task_id,
+                    status="downloading",
+                    playlist_title=info.title,
+                    total_entries=info.entry_count,
+                    completed_entries=index,
+                    current_entry=entry.title,
+                )
 
             zip_path = os.path.join(
                 temp_dir, f"{cls._sanitize_cli_filename(info.title)}.zip"
