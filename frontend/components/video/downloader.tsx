@@ -10,10 +10,8 @@ import { FormatsTable } from './formats-table'
 import { FileDrop } from './file-drop'
 import { PlaylistSummary } from './playlist-summary'
 import {
-  fetchFormats,
-  fetchPlaylist,
   getErrorMessage,
-  type DownloadMode,
+  resolveMedia,
   type PlaylistInfo,
   type VideoInfo,
 } from '@/lib/api-client'
@@ -22,56 +20,36 @@ type Tab = 'download' | 'convert'
 
 export function Downloader() {
   const [tab, setTab] = useState<Tab>('download')
-  const [downloadMode, setDownloadMode] = useState<DownloadMode>('track')
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
   const [playlistInfo, setPlaylistInfo] = useState<PlaylistInfo | null>(null)
   const [originalUrl, setOriginalUrl] = useState<string>('')
 
-  const formatsMutation = useMutation({
-    mutationFn: fetchFormats,
+  const resolveMutation = useMutation({
+    mutationFn: resolveMedia,
     onSuccess: (data, url) => {
-      setVideoInfo(data)
+      if (data.kind === 'playlist') {
+        setPlaylistInfo(data.playlist)
+        setVideoInfo(null)
+        setOriginalUrl(url)
+        return
+      }
+
+      setVideoInfo(data.video)
       setPlaylistInfo(null)
       setOriginalUrl(url)
     },
   })
 
-  const playlistMutation = useMutation({
-    mutationFn: fetchPlaylist,
-    onSuccess: (data, url) => {
-      setPlaylistInfo(data)
-      setVideoInfo(null)
-      setOriginalUrl(url)
-    },
-  })
-
-  const handleModeChange = (mode: DownloadMode) => {
-    setDownloadMode(mode)
-    setVideoInfo(null)
-    setPlaylistInfo(null)
-    setOriginalUrl('')
-    formatsMutation.reset()
-    playlistMutation.reset()
-  }
-
-  const handleSubmit = (url: string, mode: DownloadMode) => {
-    setDownloadMode(mode)
+  const handleSubmit = (url: string) => {
     setVideoInfo(null)
     setPlaylistInfo(null)
     setOriginalUrl(url)
-    formatsMutation.reset()
-    playlistMutation.reset()
-
-    if (mode === 'track') {
-      formatsMutation.mutate(url)
-      return
-    }
-
-    playlistMutation.mutate(url)
+    resolveMutation.reset()
+    resolveMutation.mutate(url)
   }
 
-  const isLoading = formatsMutation.isPending || playlistMutation.isPending
-  const activeError = downloadMode === 'track' ? formatsMutation.error : playlistMutation.error
+  const isLoading = resolveMutation.isPending
+  const activeError = resolveMutation.error
 
   return (
     <div className="space-y-6">
@@ -109,8 +87,6 @@ export function Downloader() {
       {tab === 'download' ? (
         <div className="space-y-8">
           <UrlForm
-            mode={downloadMode}
-            onModeChange={handleModeChange}
             onSubmit={handleSubmit}
             isLoading={isLoading}
           />
@@ -123,13 +99,13 @@ export function Downloader() {
             </Alert>
           )}
 
-          {downloadMode === 'track' ? (
-            <FormatsTable videoInfo={videoInfo} originalUrl={originalUrl} isLoading={formatsMutation.isPending} />
+          {!playlistInfo ? (
+            <FormatsTable videoInfo={videoInfo} originalUrl={originalUrl} isLoading={resolveMutation.isPending} />
           ) : (
             <PlaylistSummary
               playlistInfo={playlistInfo}
               originalUrl={originalUrl}
-              isLoading={playlistMutation.isPending}
+              isLoading={resolveMutation.isPending}
             />
           )}
         </div>

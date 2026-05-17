@@ -58,6 +58,10 @@ export const PlaylistInfoSchema = z.object({
 
 export type PlaylistInfo = z.infer<typeof PlaylistInfoSchema>
 
+export type ResolvedMedia =
+  | { kind: 'track'; video: VideoInfo }
+  | { kind: 'playlist'; playlist: PlaylistInfo }
+
 /**
  * Zod schema for error responses.
  * Mirrors backend ErrorResponse model.
@@ -186,6 +190,20 @@ export async function fetchPlaylist(url: string): Promise<PlaylistInfo> {
   } finally {
     clearTimeout(timeoutId)
   }
+}
+
+export async function resolveMedia(url: string): Promise<ResolvedMedia> {
+  try {
+    const playlist = await fetchPlaylist(url)
+    if (playlist.entry_count > 1) {
+      return { kind: 'playlist', playlist }
+    }
+  } catch {
+    // fall back to track
+  }
+
+  const video = await fetchFormats(url)
+  return { kind: 'track', video }
 }
 
 /**
