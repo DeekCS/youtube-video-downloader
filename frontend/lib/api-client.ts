@@ -192,18 +192,56 @@ export async function fetchPlaylist(url: string): Promise<PlaylistInfo> {
   }
 }
 
-export async function resolveMedia(url: string): Promise<ResolvedMedia> {
+function isLikelyPlaylistUrl(url: string): boolean {
+  const loweredUrl = url.toLowerCase()
+  const playlistPathHints = ['/playlist', '/sets/', '/album']
+
   try {
-    const playlist = await fetchPlaylist(url)
-    return { kind: 'playlist', playlist }
+    const parsed = new URL(url)
+    const loweredPath = parsed.pathname.toLowerCase()
+
+    if (parsed.searchParams.has('list')) {
+      return true
+    }
+
+    return playlistPathHints.some((hint) => loweredPath.includes(hint))
+  } catch {
+    if (loweredUrl.includes('list=')) {
+      return true
+    }
+
+    return playlistPathHints.some((hint) => loweredUrl.includes(hint))
+  }
+}
+
+export async function resolveMedia(url: string): Promise<ResolvedMedia> {
+  const playlistFirst = isLikelyPlaylistUrl(url)
+
+  if (playlistFirst) {
+    try {
+      const playlist = await fetchPlaylist(url)
+      return { kind: 'playlist', playlist }
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.code !== 'NOT_FOUND') {
+        throw error
+      }
+    }
+
+    const video = await fetchFormats(url)
+    return { kind: 'track', video }
+  }
+
+  try {
+    const video = await fetchFormats(url)
+    return { kind: 'track', video }
   } catch (error) {
     if (!(error instanceof ApiError) || error.code !== 'NOT_FOUND') {
       throw error
     }
   }
 
-  const video = await fetchFormats(url)
-  return { kind: 'track', video }
+  const playlist = await fetchPlaylist(url)
+  return { kind: 'playlist', playlist }
 }
 
 /**
