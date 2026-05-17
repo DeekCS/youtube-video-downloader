@@ -195,11 +195,11 @@ export async function fetchPlaylist(url: string): Promise<PlaylistInfo> {
 export async function resolveMedia(url: string): Promise<ResolvedMedia> {
   try {
     const playlist = await fetchPlaylist(url)
-    if (playlist.entry_count > 1) {
-      return { kind: 'playlist', playlist }
+    return { kind: 'playlist', playlist }
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== 'NOT_FOUND') {
+      throw error
     }
-  } catch {
-    // fall back to track
   }
 
   const video = await fetchFormats(url)
