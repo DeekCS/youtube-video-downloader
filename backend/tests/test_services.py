@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.video import Format, PlaylistEntry, PlaylistInfo, VideoInfo
-from app.services.errors import InvalidUrlError, VideoNotFoundError, YtdlpFailedError
 from app.services.download_tasks import create_task
+from app.services.errors import InvalidUrlError, VideoNotFoundError, YtdlpFailedError
 from app.services.yt_dlp_service import YtDlpService
 
 

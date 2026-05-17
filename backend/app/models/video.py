@@ -1,11 +1,11 @@
 """Pydantic models for video-related API contracts."""
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class DownloadMode(str, Enum):
+class DownloadMode(StrEnum):
     """Supported download modes."""
 
     track = "track"
