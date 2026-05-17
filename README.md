@@ -1,311 +1,254 @@
 # YouTube Video Downloader
 
-A production-ready, self-hosted multi-platform video downloader with a clean web interface.
+A self-hosted multi-platform downloader with a clean web UI, a FastAPI backend, and yt-dlp powering metadata extraction and downloads.
+
+## Features
+
+- Download a single track from supported platforms
+- Download an entire playlist as one zip file
+- Fetch available formats for track downloads
+- Fetch playlist metadata and entry counts
+- Real-time progress updates through SSE
+- Server-side file handling so the browser gets a local file transfer
+- Support for yt-dlp-compatible platforms such as YouTube, SoundCloud, Vimeo, Instagram, TikTok, X/Twitter, and more
 
 ## Architecture
 
+```text
+Browser -> Next.js 16 frontend -> FastAPI backend -> yt-dlp -> platform
 ```
-Browser → Next.js 16 (App Router) → FastAPI (/api/v1) → yt-dlp → Video Platform
-```
 
-### Tech Stack
+## Tech Stack
 
-**Backend:**
-- FastAPI + Pydantic v2 (Python 3.11+)
-- yt-dlp for video metadata extraction and download
-- uv for dependency management
-- ruff + mypy for linting and type checking
-- pytest for testing
+**Backend**
+- FastAPI + Pydantic v2
+- yt-dlp
+- Python 3.11+
+- pytest
+- ruff
+- mypy
 
-**Frontend:**
-- Next.js 16 (App Router, Server Components)
-- TypeScript (strict mode)
-- shadcn/ui + Tailwind CSS
-- React Query v5 for data fetching
-- zod for runtime validation
-- pnpm for package management
+**Frontend**
+- Next.js 16 (App Router)
+- TypeScript
+- React Query
+- zod
+- Tailwind CSS + shadcn/ui
+- pnpm
 
-**Deployment:**
-- Railway (two services: backend + frontend)
-- Node 20 LTS (frontend)
-- Python 3.11+ (backend)
+**Deployment**
+- Railway
+- Docker
 
 ## Project Structure
 
-```
+```text
 youtube-video-downloader/
-├── backend/                 # FastAPI application
+├── backend/
 │   ├── app/
-│   │   ├── main.py         # Application entry point
-│   │   ├── core/           # Configuration, logging
-│   │   ├── models/         # Pydantic models (API contracts)
-│   │   ├── services/       # Business logic (yt-dlp integration)
-│   │   └── api/            # REST endpoints
-│   ├── tests/              # Unit and integration tests
-│   ├── pyproject.toml      # Dependencies and tooling config
-│   ├── Dockerfile          # Production container
-│   └── .env.example        # Environment variables template
-├── frontend/               # Next.js application
-│   ├── app/                # App Router pages and layouts
-│   ├── components/         # React components
-│   ├── lib/                # Utilities and API client
-│   ├── public/             # Static assets
-│   ├── package.json        # Dependencies
-│   └── .env.example        # Environment variables template
-├── docker-compose.yml      # Local development orchestration
-└── README.md               # This file
+│   │   ├── api/
+│   │   ├── core/
+│   │   ├── models/
+│   │   └── services/
+│   ├── tests/
+│   └── pyproject.toml
+├── frontend/
+│   ├── app/
+│   ├── components/
+│   ├── lib/
+│   └── package.json
+├── docs/
+├── docker-compose.yml
+└── README.md
 ```
 
-## API Contract
+## Download Modes
 
-### Endpoint: `POST /api/v1/videos/formats`
+### Track mode
 
-**Request:**
+Track mode keeps the existing format picker flow:
+
+1. Paste a supported media URL
+2. Fetch available formats
+3. Pick a format
+4. Download the selected track
+
+### Playlist mode
+
+Playlist mode uses a separate metadata flow:
+
+1. Paste a playlist URL
+2. Fetch playlist title and entries
+3. Start one playlist download job
+4. Receive one zip file containing the playlist entries
+
+## API Overview
+
+### `POST /api/v1/videos/formats`
+
+Fetch metadata and formats for a single track.
+
+**Request**
 ```json
 {
   "url": "https://www.youtube.com/watch?v=..."
 }
 ```
 
-**Response:**
+### `POST /api/v1/videos/playlist`
+
+Fetch playlist metadata and entries.
+
+**Request**
 ```json
 {
-  "title": "Video Title",
-  "thumbnail_url": "https://...",
-  "duration_seconds": 180,
-  "formats": [
-    {
-      "id": "22",
-      "quality_label": "720p",
-      "mime_type": "video/mp4",
-      "filesize_bytes": 12345678,
-      "is_audio_only": false,
-      "is_video_only": false
-    }
-  ]
+  "url": "https://soundcloud.com/user/sets/demo"
 }
 ```
 
-### Endpoint: `GET /api/v1/videos/download`
+### `POST /api/v1/videos/download/start`
 
-**Query Parameters:**
-- `url`: Video URL (required)
-- `format_id`: Format ID from formats list (required)
+Start a track or playlist download.
 
-**Response:**
-- Streaming file download with appropriate `Content-Disposition` and `Content-Type` headers
-
-### Error Response Format
-
-All errors return:
+**Track request**
 ```json
 {
-  "code": "INVALID_URL",
-  "message": "Human-readable error message"
+  "url": "https://www.youtube.com/watch?v=...",
+  "format_id": "22",
+  "download_mode": "track"
 }
 ```
 
-**Error Codes:**
-- `INVALID_URL`: Malformed or blocked URL
-- `UNSUPPORTED_PLATFORM`: Platform not supported by yt-dlp
-- `NOT_FOUND`: Video not found or unavailable
-- `FORMAT_NOT_AVAILABLE`: Requested format not available
-- `YTDLP_FAILED`: yt-dlp execution failed
-- `INTERNAL_ERROR`: Unexpected server error
+**Playlist request**
+```json
+{
+  "url": "https://soundcloud.com/user/sets/demo",
+  "download_mode": "playlist"
+}
+```
+
+### `GET /api/v1/videos/download/{download_id}/progress`
+
+Server-sent events stream for progress updates.
+
+### `GET /api/v1/videos/download/{download_id}/file`
+
+Fetch the completed file after the job finishes.
+
+## Error Codes
+
+- `INVALID_URL`
+- `UNSUPPORTED_PLATFORM`
+- `NOT_FOUND`
+- `FORMAT_NOT_AVAILABLE`
+- `YTDLP_FAILED`
+- `INTERNAL_ERROR`
+- `RATE_LIMITED`
 
 ## Local Development
 
-### Quick Setup (Recommended)
+### Prerequisites
 
-Run the automated setup script:
+- Python 3.11+
+- Node 20+
+- pnpm
+- uv
+
+### Quick start
 
 ```bash
 ./setup.sh
 ```
 
-This will check prerequisites, install dependencies, and configure environment files.
-
-### Prerequisites
-
-- Python 3.11+
-- Node 20 LTS
-- pnpm (`npm install -g pnpm`)
-- uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
-
-### Backend Setup
+### Backend
 
 ```bash
 cd backend
-
-# Install dependencies
 uv sync
-
-# Copy environment template
 cp .env.example .env
-
-# Run development server (with auto-reload)
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-# Run tests
+**Backend checks**
+
+```bash
 uv run pytest
-
-# Lint and type check
 uv run ruff check .
 uv run mypy app
 ```
 
-### CLI (`video-dl`)
-
-The backend installs a small CLI that uses the same yt-dlp settings as the API (cookies, player client, etc. from `.env`):
-
-```bash
-cd backend
-
-# List formats (table or JSON)
-uv run video-dl formats "https://www.youtube.com/watch?v=..."
-uv run video-dl formats "URL" --json
-
-# Download: omit -f to choose a format interactively (TTY required)
-uv run video-dl download "URL"
-
-# Non-interactive: set format id (e.g. 18 = typical 360p single-file MP4)
-uv run video-dl download "URL" -f 18 -y
-
-# Output directory (default: ~/Downloads)
-uv run video-dl download "URL" -f 18 -y -o ~/Videos
-```
-
-Files are saved as `{title} [{video_id}].{ext}` under the output directory.
-
-### Frontend Setup
+### Frontend
 
 ```bash
 cd frontend
-
-# Install dependencies
 pnpm install
-
-# Copy environment template
 cp .env.example .env.local
-
-# Edit .env.local and set:
-# NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1
-
-# Run development server
 pnpm dev
+```
 
-# Lint and type check
+**Frontend checks**
+
+```bash
 pnpm lint
 pnpm typecheck
 ```
 
-### Using Docker Compose (Optional)
+### Docker Compose
 
 ```bash
-# Start both services
 docker-compose up
-
-# Backend: http://localhost:8000
-# Frontend: http://localhost:3000
 ```
 
-## Railway Deployment
+- Frontend: `http://localhost:3000`
+- Backend: `http://localhost:8000`
 
-### Backend Service
+## Environment Variables
 
-1. Create a new Railway service from this repository
-2. Set root directory to `backend/`
-3. Configure environment variables:
-   ```
-   ENV=production
-   API_V1_PREFIX=/api/v1
-   CORS_ORIGINS=https://your-frontend.up.railway.app
-   LOG_LEVEL=INFO
-   ```
-4. Railway will detect the Dockerfile and build automatically
-5. Verify deployment:
-   - `GET /health` → `{"status": "healthy"}`
-   - `GET /docs` → FastAPI Swagger UI
+### Backend
 
-### Frontend Service
+Typical backend variables include:
 
-1. Create a new Railway service from this repository
-2. Set root directory to `frontend/`
-3. Configure environment variables:
-   ```
-   NEXT_PUBLIC_API_BASE=https://your-backend.up.railway.app/api/v1
-   ```
-4. Railway builds from `frontend/Dockerfile` (see `frontend/railway.toml`). Set `NEXT_PUBLIC_API_BASE` before build.
-5. Verify: Navigate to the frontend URL and test the downloader flow
+- `ENV`
+- `API_V1_PREFIX`
+- `CORS_ORIGINS`
+- `LOG_LEVEL`
 
-Full walkthrough, variable references, and troubleshooting: **[RAILWAY.md](./RAILWAY.md)**.
+### Frontend
 
-### CLI (variables, domains, redeploy, logs)
+- `NEXT_PUBLIC_API_BASE=http://localhost:8000/api/v1`
+
+## CLI
+
+The backend also provides a `video-dl` CLI that uses the same yt-dlp configuration as the API.
 
 ```bash
-npm i -g @railway/cli && railway login && railway link
-./scripts/railway-bootstrap.sh   # sets env, domains, redeploys backend + frontend
+cd backend
+uv run video-dl formats "https://www.youtube.com/watch?v=..."
+uv run video-dl download "https://www.youtube.com/watch?v=..." -f 22 -y
 ```
 
-Copy-paste commands: [RAILWAY.md → Setup with Railway CLI](./RAILWAY.md#setup-with-railway-cli).
+## Security Notes
 
-### Monitoring
+- Private and localhost URLs are blocked by default
+- Frontend and backend are CORS-configured for known origins
+- URL logging strips sensitive query data
 
-- Use Railway logs to inspect yt-dlp failures (structured JSON logs in production)
-- Watch for `YTDLP_FAILED` errors with full context
-- Scale Uvicorn workers if downloads become heavy (edit Dockerfile `CMD`)
+## Deployment
 
-## Updating API Contracts
+Railway deploys the backend and frontend as separate services.
 
-When changing the API shape:
+- Backend root: `backend/`
+- Frontend root: `frontend/`
 
-1. Update Pydantic models in `backend/app/models/video.py`
-2. Update zod schemas in `frontend/lib/api-client.ts`
-3. Run backend tests: `uv run pytest`
-4. Run frontend type check: `pnpm typecheck`
-5. Test end-to-end: formats fetch → download
-
-## Security Considerations
-
-- **SSRF Protection:** Backend blocks private/localhost URLs by default
-- **CORS:** Locked to known frontend origins only
-- **URL Logging:** Only hostname + hash are logged, not full URL (sensitive query params)
-- **Legal Notice:** Frontend displays clear ToS/legal constraints
-
-## Roadmap
-
-### Completed (MVP)
-- ✅ YouTube video metadata and single-format download
-- ✅ Clean, responsive shadcn/ui interface
-- ✅ Strict typing (Pydantic + zod)
-- ✅ Railway deployment
-
-### Future Enhancements
-- [ ] **Best Quality Merges:** Add ffmpeg support for bestvideo+bestaudio merging
-- [ ] **More Platforms:** Extend beyond YouTube (Vimeo, Twitter, etc.) via yt-dlp
-- [ ] **Background Jobs:** Offload downloads to Celery/RQ with job polling
-- [ ] **Object Storage:** Store downloads in S3/R2 for resumable access
-- [ ] **User History:** Track downloads (requires auth + database)
-- [ ] **Rate Limiting:** Prevent abuse (per-IP or per-user quotas)
-- [ ] **Observability:** OpenTelemetry tracing, Prometheus metrics
-
-## Legal Notice
-
-This tool is intended for downloading content you own or have explicit rights to download. Users are responsible for complying with applicable copyright laws, terms of service, and platform policies. Misuse may violate laws in your jurisdiction.
-
-## License
-
-MIT License - See LICENSE file for details
+See `RAILWAY.md` for the full setup guide.
 
 ## Contributing
 
-Contributions welcome! Please:
-1. Follow existing code style (ruff for Python, prettier for TypeScript)
-2. Add tests for new features
-3. Update API contracts in both backend models and frontend zod schemas
-4. Keep the README updated
+- Follow the existing code style
+- Add tests for behavior changes
+- Update both backend models and frontend schemas when APIs change
+- Keep this README current when features change
 
----
+## License
 
-**Built with ❤️ using FastAPI, Next.js, and yt-dlp**
-# Last updated: Fri Feb 13 13:51:02 +03 2026
+MIT
