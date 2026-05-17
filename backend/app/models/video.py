@@ -1,7 +1,15 @@
 """Pydantic models for video-related API contracts."""
+from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class DownloadMode(str, Enum):
+    """Supported download modes."""
+
+    track = "track"
+    playlist = "playlist"
 
 
 class FormatsRequest(BaseModel):
@@ -34,15 +42,19 @@ class DownloadRequest(BaseModel):
         min_length=10,
         max_length=2048,
     )
-    format_id: str = Field(
-        ...,
+    format_id: str | None = Field(
+        default=None,
         description="Format ID from the formats list (e.g., '22', '140', 'bestvideo[height<=1080]+bestaudio/best')",
         min_length=1,
         max_length=500,
         examples=["22", "140", "best", "bestvideo[height<=1080]+bestaudio/best"],
     )
+    download_mode: DownloadMode = Field(
+        default=DownloadMode.track,
+        description="Whether to download a single track or a full playlist",
+    )
 
-    @field_validator("url", "format_id")
+    @field_validator("url")
     @classmethod
     def validate_not_empty(cls, v: str) -> str:
         """Ensure fields are not empty after stripping."""
@@ -50,6 +62,24 @@ class DownloadRequest(BaseModel):
         if not v:
             raise ValueError("Field cannot be empty")
         return v
+
+    @field_validator("format_id", mode="before")
+    @classmethod
+    def normalize_format_id(cls, v: object) -> str | None:
+        """Strip whitespace from format_id and reject empty strings."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
+    @model_validator(mode="after")
+    def validate_mode_fields(self) -> "DownloadRequest":
+        """Require a format id for track downloads."""
+        if self.download_mode == DownloadMode.track and not self.format_id:
+            raise ValueError("format_id is required for track downloads")
+        return self
 
 
 class Format(BaseModel):
@@ -145,6 +175,26 @@ class VideoInfo(BaseModel):
                 ],
             }
         }
+    )
+
+
+class PlaylistEntry(BaseModel):
+    """Model representing a single playlist entry."""
+
+    id: str = Field(..., description="Playlist entry identifier")
+    title: str = Field(..., description="Playlist entry title", min_length=1)
+    url: str | None = Field(default=None, description="Entry URL when available")
+
+
+class PlaylistInfo(BaseModel):
+    """Model representing playlist metadata and entries."""
+
+    title: str = Field(..., description="Playlist title", min_length=1)
+    entry_count: int = Field(..., description="Number of entries in the playlist", ge=0)
+    entries: list[PlaylistEntry] = Field(
+        ...,
+        description="Playlist entries in playback order",
+        min_length=1,
     )
 
 

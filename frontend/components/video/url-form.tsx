@@ -7,10 +7,12 @@ import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { FormatsRequestSchema } from '@/lib/api-client'
+import { FormatsRequestSchema, type DownloadMode } from '@/lib/api-client'
 
 interface UrlFormProps {
-  onSubmit: (url: string) => void
+  mode: DownloadMode
+  onModeChange: (mode: DownloadMode) => void
+  onSubmit: (url: string, mode: DownloadMode) => void
   isLoading?: boolean
 }
 
@@ -71,7 +73,7 @@ const PLATFORMS = [
   },
 ]
 
-export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
+export function UrlForm({ mode, onModeChange, onSubmit, isLoading = false }: UrlFormProps) {
   const [url, setUrl] = useState('')
   const [error, setError] = useState<string | null>(null)
 
@@ -81,7 +83,7 @@ export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
 
     try {
       const validated = FormatsRequestSchema.parse({ url: url.trim() })
-      onSubmit(validated.url)
+      onSubmit(validated.url, mode)
     } catch (err) {
       if (err instanceof z.ZodError) {
         setError(err.errors[0]?.message || 'Invalid URL')
@@ -94,6 +96,40 @@ export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
+        <div className="inline-flex rounded-lg border border-border p-1">
+          <button
+            type="button"
+            onClick={() => {
+              setError(null)
+              onModeChange('track')
+            }}
+            disabled={isLoading}
+            className={[
+              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              mode === 'track'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-muted/60',
+            ].join(' ')}
+          >
+            Track
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null)
+              onModeChange('playlist')
+            }}
+            disabled={isLoading}
+            className={[
+              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              mode === 'playlist'
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:bg-muted/60',
+            ].join(' ')}
+          >
+            Playlist
+          </button>
+        </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <Input
             type="text"
@@ -105,7 +141,7 @@ export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
             }}
             disabled={isLoading}
             className="flex-1"
-            aria-label="Video URL"
+            aria-label={mode === 'track' ? 'Track URL' : 'Playlist URL'}
           />
           <Button type="submit" disabled={isLoading || !url.trim()} className="w-full sm:w-auto sm:min-w-[140px]">
             {isLoading ? (
@@ -116,7 +152,7 @@ export function UrlForm({ onSubmit, isLoading = false }: UrlFormProps) {
             ) : (
               <>
                 <Download className="h-4 w-4" />
-                Fetch Formats
+                {mode === 'track' ? 'Fetch Formats' : 'Fetch Playlist'}
               </>
             )}
           </Button>

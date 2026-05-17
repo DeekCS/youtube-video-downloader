@@ -1,9 +1,18 @@
 """Tests for API endpoints."""
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from app.models.video import Format, VideoInfo
+from app.models.video import (
+    DownloadMode,
+    DownloadRequest,
+    Format,
+    PlaylistEntry,
+    PlaylistInfo,
+    VideoInfo,
+)
 
 
 class TestHealthEndpoint:
@@ -164,3 +173,98 @@ class TestDownloadStartEndpoint:
         assert response.status_code == 404
         data = response.json()
         assert data["code"] == "FORMAT_NOT_AVAILABLE"
+
+    @patch("app.api.v1.endpoints.videos.YtDlpService.download_playlist_to_zip")
+    @patch("app.api.v1.endpoints.videos.YtDlpService.fetch_playlist_info")
+    def test_download_start_playlist_mode_creates_zip(
+        self,
+        mock_playlist: MagicMock,
+        mock_download_playlist: MagicMock,
+        client: TestClient,
+    ) -> None:
+        """Playlist mode should package the playlist into a zip download."""
+        mock_playlist.return_value = PlaylistInfo(
+            title="Demo Playlist",
+            entry_count=1,
+            entries=[
+                PlaylistEntry(
+                    id="111",
+                    title="Track One",
+                    url="https://example.com/track-one",
+                )
+            ],
+        )
+
+        response = client.post(
+            "/api/v1/videos/download/start",
+            json={
+                "url": "https://soundcloud.com/user/sets/demo",
+                "download_mode": "playlist",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["filename"] == "Demo Playlist.zip"
+        assert mock_download_playlist.call_args[0][0] == "https://soundcloud.com/user/sets/demo"
+
+
+class TestPlaylistEndpoint:
+    """Tests for playlist metadata endpoint."""
+
+    @patch("app.api.v1.endpoints.videos.YtDlpService.fetch_playlist_info")
+    def test_playlist_endpoint_returns_playlist_info(
+        self, mock_fetch: MagicMock, client: TestClient
+    ) -> None:
+        """Test successful playlist metadata fetching."""
+        mock_fetch.return_value = PlaylistInfo(
+            title="Demo Playlist",
+            entry_count=1,
+            entries=[
+                PlaylistEntry(
+                    id="111",
+                    title="Track One",
+                    url="https://example.com/1",
+                )
+            ],
+        )
+
+        response = client.post(
+            "/api/v1/videos/playlist",
+            json={"url": "https://soundcloud.com/user/sets/demo"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["title"] == "Demo Playlist"
+        assert data["entry_count"] == 1
+        assert data["entries"][0]["title"] == "Track One"
+
+
+class TestDownloadRequestModel:
+    """Tests for download request validation."""
+
+    def test_download_request_requires_format_id_for_track_mode(self) -> None:
+        """Track downloads require a format id."""
+        with pytest.raises(ValidationError):
+            DownloadRequest(
+                url="https://www.youtube.com/watch?v=test",
+                download_mode=DownloadMode.track,
+            )
+
+    def test_download_request_accepts_playlist_mode_without_format_id(self) -> None:
+        """Playlist downloads can omit format_id."""
+        request = DownloadRequest(
+            url="https://soundcloud.com/user/sets/demo",
+            download_mode=DownloadMode.playlist,
+        )
+
+        assert request.format_id is None
+
+    def test_download_request_strips_format_id_whitespace(self) -> None:
+        """Track downloads trim whitespace from format_id."""
+        request = DownloadRequest(
+            url="https://www.youtube.com/watch?v=test",
+            format_id=" 22 ",
+        )
+
+        assert request.format_id == "22"

@@ -20,6 +20,8 @@ from app.models.video import (
     DownloadRequest,
     DownloadStartResponse,
     FormatsRequest,
+    DownloadMode,
+    PlaylistInfo,
     VideoInfo,
 )
 from app.services.download_tasks import (
@@ -70,6 +72,31 @@ async def fetch_formats(request: Request, body: FormatsRequest) -> VideoInfo:
     # Run blocking yt-dlp call in a thread to avoid blocking the event loop
     video_info = await asyncio.to_thread(YtDlpService.fetch_formats, body.url)
     return video_info
+
+
+@router.post(
+    "/playlist",
+    response_model=PlaylistInfo,
+    status_code=status.HTTP_200_OK,
+    summary="Fetch playlist info",
+    description="Retrieve playlist metadata and entries for a playlist URL",
+    responses={
+        200: {
+            "description": "Successfully retrieved playlist information",
+            "model": PlaylistInfo,
+        },
+        400: {"description": "Invalid URL"},
+        404: {"description": "Playlist not found"},
+        422: {"description": "Unsupported platform"},
+        429: {"description": "Rate limit exceeded"},
+        502: {"description": "yt-dlp failed to process the playlist"},
+    },
+)
+@limiter.limit("10/minute")
+async def fetch_playlist(request: Request, body: FormatsRequest) -> PlaylistInfo:
+    """Fetch playlist metadata and entries for a URL."""
+    playlist_info = await asyncio.to_thread(YtDlpService.fetch_playlist_info, body.url)
+    return playlist_info
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -182,36 +209,46 @@ async def start_download(request: Request, body: DownloadRequest) -> DownloadSta
     cleanup_stale()
 
     normalized_url = YtDlpService.normalize_url(body.url)
-
-    video_info = YtDlpService.get_cached_formats(normalized_url)
-    if video_info is None:
-        video_info = await asyncio.to_thread(
-            YtDlpService.fetch_formats, normalized_url
+    playlist_info: PlaylistInfo | None = None
+    if body.download_mode == DownloadMode.playlist:
+        playlist_info = await asyncio.to_thread(
+            YtDlpService.fetch_playlist_info, normalized_url
         )
-
-    selected_format = next(
-        (fmt for fmt in video_info.formats if fmt.id == body.format_id),
-        None,
-    )
-    if not selected_format:
-        from app.services.errors import FormatNotAvailableError
-
-        raise FormatNotAvailableError(
-            f"Format '{body.format_id}' not found in available formats"
-        )
-
-    dedup_key = (normalized_url, body.format_id)
-    is_merged = YtDlpService.is_merged_format(body.format_id)
-
-    # Determine filename and content type based on format type
-    if is_merged:
-        ext = "mp4"
-        content_type = "video/mp4"
+        dedup_key = ("playlist", normalized_url)
+        filename = f"{playlist_info.title}.zip"
+        content_type = "application/zip"
+        is_merged = False
     else:
-        ext = selected_format.mime_type.split("/")[-1]
-        content_type = selected_format.mime_type or "application/octet-stream"
+        video_info = YtDlpService.get_cached_formats(normalized_url)
+        if video_info is None:
+            video_info = await asyncio.to_thread(
+                YtDlpService.fetch_formats, normalized_url
+            )
+        format_id = body.format_id
 
-    filename = f"{video_info.title}.{ext}"
+        selected_format = next(
+            (fmt for fmt in video_info.formats if fmt.id == format_id),
+            None,
+        )
+        if not selected_format:
+            from app.services.errors import FormatNotAvailableError
+
+            raise FormatNotAvailableError(
+                f"Format '{format_id}' not found in available formats"
+            )
+
+        dedup_key = (normalized_url, format_id)
+        is_merged = YtDlpService.is_merged_format(format_id)
+
+        # Determine filename and content type based on format type
+        if is_merged:
+            ext = "mp4"
+            content_type = "video/mp4"
+        else:
+            ext = selected_format.mime_type.split("/")[-1]
+            content_type = selected_format.mime_type or "application/octet-stream"
+
+        filename = f"{video_info.title}.{ext}"
 
     # --- Deduplication: return existing task if still active ---
     with _active_downloads_lock:
@@ -234,13 +271,15 @@ async def start_download(request: Request, body: DownloadRequest) -> DownloadSta
 
     def _run() -> None:
         try:
-            if is_merged:
+            if body.download_mode == DownloadMode.playlist:
+                YtDlpService.download_playlist_to_zip(normalized_url, task)
+            elif is_merged:
                 YtDlpService.download_merged_with_progress(
-                    normalized_url, body.format_id, task
+                    normalized_url, format_id, task
                 )
             else:
                 YtDlpService.download_single_with_progress(
-                    normalized_url, body.format_id, task
+                    normalized_url, format_id, task
                 )
         except Exception as exc:
             task.status = "failed"
@@ -292,6 +331,10 @@ async def download_progress(
                 "file_size": t.file_size,
                 "downloaded_bytes": t.downloaded_bytes,
                 "total_bytes": t.total_bytes,
+                "playlist_title": t.playlist_title,
+                "total_entries": t.total_entries,
+                "completed_entries": t.completed_entries,
+                "current_entry": t.current_entry,
             }
             if t.error:
                 data["error"] = t.error

@@ -88,7 +88,21 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
 
     setDlStates((s) => ({
       ...s,
-      [formatId]: { status: 'pending', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, downloading: true },
+      [formatId]: {
+        status: 'pending',
+        progress: 0,
+        phase: '',
+        speed: '',
+        eta: '',
+        file_size: 0,
+        downloaded_bytes: 0,
+        total_bytes: 0,
+        playlist_title: '',
+        total_entries: 0,
+        completed_entries: 0,
+        current_entry: '',
+        downloading: true,
+      },
     }))
 
     const release = () => activeDownloads.current.delete(formatId)
@@ -135,7 +149,22 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
           // SSE connection error (after retries exhausted)
           setDlStates((s) => ({
             ...s,
-            [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Connection lost', downloading: true },
+            [formatId]: {
+              status: 'failed',
+              progress: 0,
+              phase: '',
+              speed: '',
+              eta: '',
+              file_size: 0,
+              downloaded_bytes: 0,
+              total_bytes: 0,
+              playlist_title: '',
+              total_entries: 0,
+              completed_entries: 0,
+              current_entry: '',
+              error: 'Connection lost',
+              downloading: true,
+            },
           }))
           setTimeout(() => {
             setDlStates((s) => {
@@ -152,7 +181,22 @@ export function FormatsTable({ videoInfo, originalUrl, isLoading = false }: Form
     } catch {
       setDlStates((s) => ({
         ...s,
-        [formatId]: { status: 'failed', progress: 0, phase: '', speed: '', eta: '', file_size: 0, downloaded_bytes: 0, total_bytes: 0, error: 'Failed to start', downloading: true },
+        [formatId]: {
+          status: 'failed',
+          progress: 0,
+          phase: '',
+          speed: '',
+          eta: '',
+          file_size: 0,
+          downloaded_bytes: 0,
+          total_bytes: 0,
+          playlist_title: '',
+          total_entries: 0,
+          completed_entries: 0,
+          current_entry: '',
+          error: 'Failed to start',
+          downloading: true,
+        },
       }))
       setTimeout(() => {
         setDlStates((s) => {

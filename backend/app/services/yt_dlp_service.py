@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+import zipfile
 from collections.abc import Callable
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -18,7 +19,7 @@ from cachetools import TTLCache
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models.video import Format, VideoInfo
+from app.models.video import Format, PlaylistEntry, PlaylistInfo, VideoInfo
 from app.services.download_tasks import DownloadTask
 from app.services.errors import (
     FormatNotAvailableError,
@@ -503,6 +504,64 @@ class YtDlpService:
             formats=all_formats,
         )
 
+    @staticmethod
+    def _extract_playlist_entry(entry: dict[str, Any]) -> PlaylistEntry | None:
+        """Normalize a single playlist entry to PlaylistEntry."""
+        entry_id = str(entry.get("id") or entry.get("url") or "").strip()
+        title = str(entry.get("title") or "").strip()
+        if not entry_id or not title:
+            return None
+
+        url = entry.get("webpage_url") or entry.get("url")
+        return PlaylistEntry(
+            id=entry_id,
+            title=title,
+            url=str(url) if url else None,
+        )
+
+    @classmethod
+    def _extract_playlist_info(cls, info: dict[str, Any]) -> PlaylistInfo:
+        """Extract playlist metadata and entries from yt-dlp output."""
+        title = str(info.get("title") or "Untitled Playlist").strip()
+        raw_entries = info.get("entries")
+        if not isinstance(raw_entries, list) or not raw_entries:
+            raise VideoNotFoundError("Playlist has no playable entries")
+
+        entries: list[PlaylistEntry] = []
+        for raw_entry in raw_entries:
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = cls._extract_playlist_entry(raw_entry)
+            if entry is not None:
+                entries.append(entry)
+
+        if not entries:
+            raise VideoNotFoundError("Playlist has no playable entries")
+
+        return PlaylistInfo(
+            title=title,
+            entry_count=len(entries),
+            entries=entries,
+        )
+
+    @staticmethod
+    def _resolve_playable_info(info: dict[str, Any]) -> dict[str, Any]:
+        """Resolve extractor output to a playable entry with formats.
+
+        Some URLs (notably SoundCloud discover links) resolve to a playlist-like
+        payload where top-level metadata has no formats, but entries do.
+        """
+        if info.get("formats"):
+            return info
+
+        entries = info.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and entry.get("formats"):
+                    return entry
+
+        return info
+
     # ------------------------------------------------------------------
     # Error handling
     # ------------------------------------------------------------------
@@ -700,6 +759,99 @@ class YtDlpService:
         logger.info(f"Saved download to {final_path}")
         return final_path
 
+    @classmethod
+    def download_playlist_to_zip(cls, url: str, task: DownloadTask) -> None:
+        """Download a playlist entry-by-entry and package it into a zip."""
+        normalized_url = cls.normalize_url(url)
+        info = cls.fetch_playlist_info(normalized_url)
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_playlist_")
+        tracks_dir = os.path.join(temp_dir, "tracks")
+        os.makedirs(tracks_dir, exist_ok=True)
+
+        from app.services.download_tasks import update_task as _update_task
+
+        try:
+            task.temp_dir = temp_dir
+            task.playlist_title = info.title
+            task.total_entries = info.entry_count
+            task.completed_entries = 0
+            task.current_entry = ""
+            task.content_type = "application/zip"
+            task.status = "downloading"
+            _update_task(
+                task.task_id,
+                status="downloading",
+                temp_dir=temp_dir,
+                playlist_title=info.title,
+                total_entries=info.entry_count,
+                completed_entries=0,
+                current_entry="",
+                content_type="application/zip",
+            )
+
+            for index, entry in enumerate(info.entries, start=1):
+                task.current_entry = entry.title
+                task.completed_entries = index - 1
+                _update_task(
+                    task.task_id,
+                    status="downloading",
+                    playlist_title=info.title,
+                    total_entries=info.entry_count,
+                    completed_entries=index - 1,
+                    current_entry=entry.title,
+                )
+
+                downloaded = cls.download_to_directory(
+                    entry.url or normalized_url,
+                    "best",
+                    tracks_dir,
+                )
+                final_name = (
+                    f"{index:03d} - {cls._sanitize_cli_filename(entry.title)}"
+                    f"{os.path.splitext(downloaded)[1]}"
+                )
+                os.replace(downloaded, os.path.join(tracks_dir, final_name))
+
+            zip_path = os.path.join(
+                temp_dir, f"{cls._sanitize_cli_filename(info.title)}.zip"
+            )
+            with zipfile.ZipFile(
+                zip_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+            ) as zf:
+                for root, _dirs, files in os.walk(tracks_dir):
+                    for file_name in files:
+                        full_path = os.path.join(root, file_name)
+                        zf.write(full_path, arcname=file_name)
+
+            task.file_path = zip_path
+            task.content_type = "application/zip"
+            task.status = "completed"
+            task.playlist_title = info.title
+            task.total_entries = info.entry_count
+            task.completed_entries = info.entry_count
+            task.current_entry = ""
+            task.file_size = os.path.getsize(zip_path)
+            _update_task(
+                task.task_id,
+                file_path=zip_path,
+                content_type="application/zip",
+                status="completed",
+                playlist_title=info.title,
+                total_entries=info.entry_count,
+                completed_entries=info.entry_count,
+                current_entry="",
+                file_size=task.file_size,
+                temp_dir=temp_dir,
+            )
+        except Exception as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            task.status = "failed"
+            task.error = str(exc)
+            _update_task(task.task_id, status="failed", error=str(exc))
+            raise
+
     @staticmethod
     def _sanitize_cli_filename(title: str) -> str:
         """Strip path separators and control chars; keep Unicode for local paths."""
@@ -741,6 +893,7 @@ class YtDlpService:
                 if not info:
                     raise VideoNotFoundError()
 
+                info = cls._resolve_playable_info(info)
                 video_info = cls._extract_video_info(info)
                 cls._cache_set_formats(url, video_info)
 
@@ -762,6 +915,44 @@ class YtDlpService:
             cls._handle_fetch_error(e, safe_url, url)
             # _handle_fetch_error always raises; this satisfies the
             # type-checker.
+            raise  # pragma: no cover
+
+    @classmethod
+    def fetch_playlist_info(cls, url: str) -> PlaylistInfo:
+        """Fetch playlist metadata and playlist entries."""
+        url = cls.normalize_url(url)
+        safe_url = cls._sanitize_url_for_logging(url)
+        logger.info(f"Fetching playlist info for: {safe_url}")
+
+        ydl_opts = cls._build_ydl_options()
+        ydl_opts["noplaylist"] = False
+        ydl_opts["extract_flat"] = True
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                if not info or not isinstance(info, dict):
+                    raise VideoNotFoundError()
+
+                playlist_info = cls._extract_playlist_info(info)
+
+                logger.info(
+                    f"Successfully fetched playlist with {playlist_info.entry_count} "
+                    f"entries for: {safe_url}"
+                )
+                return playlist_info
+
+        except (
+            FormatNotAvailableError,
+            InvalidUrlError,
+            UnsupportedPlatformError,
+            VideoNotFoundError,
+        ):
+            raise
+
+        except Exception as e:
+            cls._handle_fetch_error(e, safe_url, url)
             raise  # pragma: no cover
 
     @classmethod

@@ -1,10 +1,14 @@
 """Tests for the yt-dlp service layer."""
+import os
+import zipfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.models.video import Format, VideoInfo
+from app.models.video import Format, PlaylistEntry, PlaylistInfo, VideoInfo
 from app.services.errors import InvalidUrlError, VideoNotFoundError, YtdlpFailedError
+from app.services.download_tasks import create_task
 from app.services.yt_dlp_service import YtDlpService
 
 
@@ -214,6 +218,103 @@ class TestFetchFormats:
         result = YtDlpService.fetch_formats("https://vimeo.com/123456")
 
         assert result.platform == "Vimeo"
+
+    @patch("app.services.yt_dlp_service.yt_dlp.YoutubeDL")
+    def test_fetch_formats_playlist_uses_first_entry(self, mock_ydl_class: MagicMock) -> None:
+        """Playlist-like responses should resolve to the first playable entry."""
+        mock_info = {
+            "_type": "playlist",
+            "title": "Personalized tracks",
+            "extractor_key": "Soundcloud:playlist",
+            "entries": [
+                {
+                    "id": "124783497",
+                    "title": "Entry Track",
+                    "thumbnail": "https://example.com/track.jpg",
+                    "duration": 123,
+                    "extractor_key": "Soundcloud",
+                    "formats": [
+                        {
+                            "format_id": "hls_aac_160k",
+                            "ext": "m4a",
+                            "abr": 160,
+                            "vcodec": "none",
+                            "acodec": "aac",
+                            "filesize": 2_000_000,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        result = YtDlpService.fetch_formats("https://soundcloud.com/discover/sets/personalized-tracks")
+
+        assert result.title == "Entry Track"
+        assert result.video_id == "124783497"
+        assert result.platform == "Soundcloud"
+        assert len(result.formats) >= 1
+
+    @patch("app.services.yt_dlp_service.YtDlpService.download_to_directory")
+    @patch("app.services.yt_dlp_service.YtDlpService.fetch_playlist_info")
+    @patch("app.services.yt_dlp_service.tempfile.mkdtemp")
+    def test_download_playlist_to_zip(
+        self,
+        mock_mkdtemp: MagicMock,
+        mock_fetch_playlist: MagicMock,
+        mock_download: MagicMock,
+        tmp_path,
+    ) -> None:
+        """Test playlist downloads are packaged into a zip archive."""
+        temp_dir = tmp_path / "playlist"
+        mock_mkdtemp.return_value = str(temp_dir)
+        mock_fetch_playlist.return_value = PlaylistInfo(
+            title="Demo Playlist",
+            entry_count=2,
+            entries=[
+                PlaylistEntry(
+                    id="111",
+                    title="Track One",
+                    url="https://example.com/1",
+                ),
+                PlaylistEntry(
+                    id="222",
+                    title="Track Two",
+                    url="https://example.com/2",
+                ),
+            ],
+        )
+
+        def _download_side_effect(url: str, format_id: str, output_dir: str, *, video_info=None):
+            idx = "1" if url.endswith("/1") else "2"
+            path = Path(output_dir) / f"downloaded-{idx}.mp3"
+            path.write_bytes(b"test")
+            return str(path)
+
+        mock_download.side_effect = _download_side_effect
+
+        task = create_task("abc123", filename="Demo Playlist.zip")
+        YtDlpService.download_playlist_to_zip(
+            "https://soundcloud.com/user/sets/demo",
+            task,
+        )
+
+        assert task.status == "completed"
+        assert task.file_path is not None
+        assert task.file_path.endswith(".zip")
+        assert task.playlist_title == "Demo Playlist"
+        assert task.total_entries == 2
+        assert task.completed_entries == 2
+        assert os.path.exists(task.file_path)
+
+        with zipfile.ZipFile(task.file_path) as zf:
+            assert sorted(zf.namelist()) == [
+                "001 - Track One.mp3",
+                "002 - Track Two.mp3",
+            ]
 
 
 class TestBuildDownloadCommand:

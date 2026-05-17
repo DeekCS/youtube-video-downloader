@@ -37,6 +37,28 @@ export const VideoInfoSchema = z.object({
 export type VideoInfo = z.infer<typeof VideoInfoSchema>
 
 /**
+ * Zod schema for a playlist entry.
+ */
+export const PlaylistEntrySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  url: z.string().nullable(),
+})
+
+export type PlaylistEntry = z.infer<typeof PlaylistEntrySchema>
+
+/**
+ * Zod schema for playlist metadata.
+ */
+export const PlaylistInfoSchema = z.object({
+  title: z.string(),
+  entry_count: z.number(),
+  entries: z.array(PlaylistEntrySchema),
+})
+
+export type PlaylistInfo = z.infer<typeof PlaylistInfoSchema>
+
+/**
  * Zod schema for error responses.
  * Mirrors backend ErrorResponse model.
  */
@@ -124,6 +146,49 @@ export async function fetchFormats(url: string): Promise<VideoInfo> {
 }
 
 /**
+ * Fetch playlist metadata from the backend.
+ */
+export async function fetchPlaylist(url: string): Promise<PlaylistInfo> {
+  const validatedInput = FormatsRequestSchema.parse({ url })
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(`${env.API_BASE}/videos/playlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: validatedInput.url }),
+      signal: controller.signal,
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      const errorData = ErrorResponseSchema.safeParse(data)
+      if (errorData.success) {
+        throw new ApiError(errorData.data.code, errorData.data.message, response.status)
+      }
+      throw new ApiError('INTERNAL_ERROR', 'An unexpected error occurred', response.status)
+    }
+
+    return PlaylistInfoSchema.parse(data)
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    if (error instanceof z.ZodError) {
+      throw new ApiError('INTERNAL_ERROR', 'Invalid response from server')
+    }
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('INTERNAL_ERROR', 'Request timed out after 30 seconds')
+    }
+    if (error instanceof Error) throw new ApiError('INTERNAL_ERROR', error.message)
+    throw new ApiError('INTERNAL_ERROR', 'An unexpected error occurred')
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+/**
  * Build URL to fetch the completed file for a download task.
  */
 export function buildTaskFileUrl(downloadId: string): string {
@@ -135,10 +200,21 @@ const StartDownloadResponseSchema = z.object({
   filename: z.string(),
 })
 
+export type DownloadMode = 'track' | 'playlist'
+
 /** Validates inputs before POST /download/start (mirrors backend DownloadRequest). */
 export const StartDownloadRequestSchema = z.object({
   url: z.string().min(10).max(2048),
-  format_id: z.string().min(1).max(500),
+  format_id: z.string().min(1).max(500).optional(),
+  download_mode: z.enum(['track', 'playlist']),
+}).superRefine((data, ctx) => {
+  if (data.download_mode === 'track' && !data.format_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['format_id'],
+      message: 'format_id is required for track downloads',
+    })
+  }
 })
 
 export const DownloadProgressSchema = z.object({
@@ -150,6 +226,10 @@ export const DownloadProgressSchema = z.object({
   file_size: z.number(),
   downloaded_bytes: z.number(),
   total_bytes: z.number(),
+  playlist_title: z.string(),
+  total_entries: z.number(),
+  completed_entries: z.number(),
+  current_entry: z.string(),
   error: z.string().optional(),
 })
 
@@ -160,11 +240,13 @@ export type DownloadProgress = z.infer<typeof DownloadProgressSchema>
  */
 export async function startDownload(
   url: string,
-  formatId: string
+  formatId?: string,
+  downloadMode: DownloadMode = 'track'
 ): Promise<{ downloadId: string; filename: string }> {
   const payload = StartDownloadRequestSchema.parse({
     url: url.trim(),
-    format_id: formatId.trim(),
+    download_mode: downloadMode,
+    ...(formatId ? { format_id: formatId.trim() } : {}),
   })
 
   const controller = new AbortController()
@@ -174,7 +256,11 @@ export async function startDownload(
     const response = await fetch(`${env.API_BASE}/videos/download/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: payload.url, format_id: payload.format_id }),
+      body: JSON.stringify({
+        url: payload.url,
+        download_mode: payload.download_mode,
+        ...(payload.format_id ? { format_id: payload.format_id } : {}),
+      }),
       signal: controller.signal,
     })
 

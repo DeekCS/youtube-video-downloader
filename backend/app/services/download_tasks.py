@@ -39,6 +39,10 @@ class DownloadTask:
     file_size: int = 0
     downloaded_bytes: int = 0
     total_bytes: int = 0
+    playlist_title: str = ""
+    total_entries: int = 0
+    completed_entries: int = 0
+    current_entry: str = ""
     error: str | None = None
     created_at: float = field(default_factory=time.time)
 
@@ -74,6 +78,10 @@ def _task_to_dict(task: DownloadTask) -> dict[str, str]:
         "file_size": str(task.file_size),
         "downloaded_bytes": str(task.downloaded_bytes),
         "total_bytes": str(task.total_bytes),
+        "playlist_title": task.playlist_title,
+        "total_entries": str(task.total_entries),
+        "completed_entries": str(task.completed_entries),
+        "current_entry": task.current_entry,
         "error": task.error or "",
         "created_at": str(task.created_at),
     }
@@ -95,6 +103,10 @@ def _dict_to_task(data: dict[str, str]) -> DownloadTask:
         file_size=int(data.get("file_size", "0")),
         downloaded_bytes=int(data.get("downloaded_bytes", "0")),
         total_bytes=int(data.get("total_bytes", "0")),
+        playlist_title=data.get("playlist_title", ""),
+        total_entries=int(data.get("total_entries", "0")),
+        completed_entries=int(data.get("completed_entries", "0")),
+        current_entry=data.get("current_entry", ""),
         error=data.get("error") or None,
         created_at=float(data.get("created_at", str(time.time()))),
     )
@@ -247,4 +259,3 @@ def cleanup_all() -> None:
 
     if removed:
         logger.info(f"Shutdown cleanup: removed {removed} download tasks")
-

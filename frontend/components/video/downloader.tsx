@@ -8,26 +8,70 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { UrlForm } from './url-form'
 import { FormatsTable } from './formats-table'
 import { FileDrop } from './file-drop'
-import { fetchFormats, getErrorMessage, type VideoInfo } from '@/lib/api-client'
+import { PlaylistSummary } from './playlist-summary'
+import {
+  fetchFormats,
+  fetchPlaylist,
+  getErrorMessage,
+  type DownloadMode,
+  type PlaylistInfo,
+  type VideoInfo,
+} from '@/lib/api-client'
 
 type Tab = 'download' | 'convert'
 
 export function Downloader() {
   const [tab, setTab] = useState<Tab>('download')
+  const [downloadMode, setDownloadMode] = useState<DownloadMode>('track')
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+  const [playlistInfo, setPlaylistInfo] = useState<PlaylistInfo | null>(null)
   const [originalUrl, setOriginalUrl] = useState<string>('')
 
   const formatsMutation = useMutation({
     mutationFn: fetchFormats,
     onSuccess: (data, url) => {
       setVideoInfo(data)
+      setPlaylistInfo(null)
       setOriginalUrl(url)
     },
   })
 
-  const handleFetchFormats = (url: string) => {
-    formatsMutation.mutate(url)
+  const playlistMutation = useMutation({
+    mutationFn: fetchPlaylist,
+    onSuccess: (data, url) => {
+      setPlaylistInfo(data)
+      setVideoInfo(null)
+      setOriginalUrl(url)
+    },
+  })
+
+  const handleModeChange = (mode: DownloadMode) => {
+    setDownloadMode(mode)
+    setVideoInfo(null)
+    setPlaylistInfo(null)
+    setOriginalUrl('')
+    formatsMutation.reset()
+    playlistMutation.reset()
   }
+
+  const handleSubmit = (url: string, mode: DownloadMode) => {
+    setDownloadMode(mode)
+    setVideoInfo(null)
+    setPlaylistInfo(null)
+    setOriginalUrl(url)
+    formatsMutation.reset()
+    playlistMutation.reset()
+
+    if (mode === 'track') {
+      formatsMutation.mutate(url)
+      return
+    }
+
+    playlistMutation.mutate(url)
+  }
+
+  const isLoading = formatsMutation.isPending || playlistMutation.isPending
+  const activeError = downloadMode === 'track' ? formatsMutation.error : playlistMutation.error
 
   return (
     <div className="space-y-6">
@@ -64,21 +108,30 @@ export function Downloader() {
       {/* Tab content */}
       {tab === 'download' ? (
         <div className="space-y-8">
-          <UrlForm onSubmit={handleFetchFormats} isLoading={formatsMutation.isPending} />
+          <UrlForm
+            mode={downloadMode}
+            onModeChange={handleModeChange}
+            onSubmit={handleSubmit}
+            isLoading={isLoading}
+          />
 
-          {formatsMutation.isError && (
+          {activeError && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{getErrorMessage(formatsMutation.error)}</AlertDescription>
+              <AlertDescription>{getErrorMessage(activeError)}</AlertDescription>
             </Alert>
           )}
 
-          <FormatsTable
-            videoInfo={videoInfo}
-            originalUrl={originalUrl}
-            isLoading={formatsMutation.isPending}
-          />
+          {downloadMode === 'track' ? (
+            <FormatsTable videoInfo={videoInfo} originalUrl={originalUrl} isLoading={formatsMutation.isPending} />
+          ) : (
+            <PlaylistSummary
+              playlistInfo={playlistInfo}
+              originalUrl={originalUrl}
+              isLoading={playlistMutation.isPending}
+            />
+          )}
         </div>
       ) : (
         <FileDrop />
@@ -86,4 +139,3 @@ export function Downloader() {
     </div>
   )
 }
-
