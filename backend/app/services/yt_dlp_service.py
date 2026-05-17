@@ -513,10 +513,22 @@ class YtDlpService:
             return None
 
         url = entry.get("webpage_url") or entry.get("url")
+        normalized_url = str(url).strip() if url else None
+        availability = str(entry.get("availability") or "").strip().lower()
+        unavailable_titles = {"[private video]", "[deleted video]"}
+        is_unavailable_title = title.lower() in unavailable_titles
+        is_available = (
+            bool(normalized_url)
+            and availability not in {"private", "subscriber_only"}
+            and not is_unavailable_title
+        )
+
         return PlaylistEntry(
             id=entry_id,
             title=title,
-            url=str(url) if url else None,
+            url=normalized_url,
+            is_available=is_available,
+            availability_reason=None if is_available else "unavailable",
         )
 
     @classmethod

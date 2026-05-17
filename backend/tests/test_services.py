@@ -468,3 +468,32 @@ class TestMergedFormatSelectors:
         merged = YtDlpService._create_merged_formats(formats)
         for fmt in merged:
             assert fmt.mime_type == "video/mp4"
+
+
+class TestFetchPlaylistInfo:
+    """Tests for playlist metadata extraction."""
+
+    @patch("app.services.yt_dlp_service.yt_dlp.YoutubeDL")
+    def test_fetch_playlist_info_marks_private_entry_unavailable(
+        self, mock_ydl_class: MagicMock
+    ) -> None:
+        """Private/unavailable entries should be marked as unavailable."""
+        mock_info = {
+            "_type": "playlist",
+            "title": "Demo",
+            "entries": [
+                {"id": "1", "title": "Track 1", "url": "https://example.com/1"},
+                {"id": "2", "title": "[Private video]", "url": "https://example.com/2"},
+            ],
+        }
+        mock_ydl = MagicMock()
+        mock_ydl.extract_info.return_value = mock_info
+        mock_ydl_class.return_value.__enter__.return_value = mock_ydl
+
+        playlist = YtDlpService.fetch_playlist_info(
+            "https://www.youtube.com/playlist?list=demo"
+        )
+
+        assert playlist.entries[0].is_available is True
+        assert playlist.entries[1].is_available is False
+        assert playlist.entries[1].availability_reason == "unavailable"

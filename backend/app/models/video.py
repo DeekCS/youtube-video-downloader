@@ -184,6 +184,14 @@ class PlaylistEntry(BaseModel):
     id: str = Field(..., description="Playlist entry identifier")
     title: str = Field(..., description="Playlist entry title", min_length=1)
     url: str | None = Field(default=None, description="Entry URL when available")
+    is_available: bool = Field(
+        default=True,
+        description="Whether the entry is available for download",
+    )
+    availability_reason: str | None = Field(
+        default=None,
+        description="Reason when the entry is unavailable",
+    )
 
 
 class PlaylistInfo(BaseModel):
