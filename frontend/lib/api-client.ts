@@ -105,6 +105,12 @@ export class ApiError extends Error {
 }
 
 const API_TIMEOUT_MS = 30_000
+const RECOVERABLE_PROBE_ERROR_CODES = new Set<ErrorResponse['code']>([
+  'NOT_FOUND',
+  'FORMAT_NOT_AVAILABLE',
+  'YTDLP_FAILED',
+  'INTERNAL_ERROR',
+])
 
 /**
  * Fetch video formats from the backend.
@@ -199,19 +205,43 @@ function isLikelyPlaylistUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     const loweredPath = parsed.pathname.toLowerCase()
+    const loweredHost = parsed.hostname.toLowerCase()
+    const hasListParam = parsed.searchParams.has('list')
+    const isYoutubeHost =
+      loweredHost === 'youtube.com'
+      || loweredHost === 'www.youtube.com'
+      || loweredHost === 'm.youtube.com'
+      || loweredHost === 'music.youtube.com'
+      || loweredHost === 'youtu.be'
 
-    if (parsed.searchParams.has('list')) {
+    if (hasListParam) {
+      if (isYoutubeHost && parsed.searchParams.has('v')) {
+        return false
+      }
       return true
     }
 
     return playlistPathHints.some((hint) => loweredPath.includes(hint))
   } catch {
+    if (
+      loweredUrl.includes('youtube.com/watch')
+      && loweredUrl.includes('v=')
+      && loweredUrl.includes('list=')
+    ) {
+      return false
+    }
+
     if (loweredUrl.includes('list=')) {
       return true
     }
 
     return playlistPathHints.some((hint) => loweredUrl.includes(hint))
   }
+}
+
+function isRecoverableProbeError(error: unknown): error is ApiError {
+  return error instanceof ApiError
+    && RECOVERABLE_PROBE_ERROR_CODES.has(error.code as ErrorResponse['code'])
 }
 
 export async function resolveMedia(url: string): Promise<ResolvedMedia> {
@@ -222,7 +252,7 @@ export async function resolveMedia(url: string): Promise<ResolvedMedia> {
       const playlist = await fetchPlaylist(url)
       return { kind: 'playlist', playlist }
     } catch (error) {
-      if (!(error instanceof ApiError) || error.code !== 'NOT_FOUND') {
+      if (!isRecoverableProbeError(error)) {
         throw error
       }
     }
@@ -235,7 +265,7 @@ export async function resolveMedia(url: string): Promise<ResolvedMedia> {
     const video = await fetchFormats(url)
     return { kind: 'track', video }
   } catch (error) {
-    if (!(error instanceof ApiError) || error.code !== 'NOT_FOUND') {
+    if (!isRecoverableProbeError(error)) {
       throw error
     }
   }
