@@ -55,10 +55,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
-EXPOSE 3000
-
-ENV PORT=3000
-# Bind to all interfaces so Railway/Docker can route traffic
+# Railway injects PORT at runtime — do NOT hardcode it here or Next.js may
+# bind to 3000 while Railway's proxy routes to a different port (→ 502).
+# HOSTNAME must be 0.0.0.0 so the container accepts external connections.
 ENV HOSTNAME=0.0.0.0
 
 CMD ["node", "server.js"]
