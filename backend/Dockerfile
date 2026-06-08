@@ -50,8 +50,11 @@ EXPOSE 8000
 ENV PYTHONUNBUFFERED=1
 ENV ENV=production
 ENV PORT=8000
-# Redis-backed task state enables multiple workers.
-ENV UVICORN_WORKERS=4
+# Single Railway replica = single worker. Multiple workers cause cross-process
+# dedup and task-state mismatches (each process has its own _active_downloads
+# and _tasks dict, so Worker B returns 404 for a task started by Worker A when
+# the Redis write was delayed/skipped). Keep at 1; scale via replicas instead.
+ENV UVICORN_WORKERS=1
 
 # Health check (uses PORT env var)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

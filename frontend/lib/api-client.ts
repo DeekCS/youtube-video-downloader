@@ -398,6 +398,14 @@ export function subscribeToProgress(
       if (parsed.success) {
         consecutiveErrors = 0
         onProgress(parsed.data)
+        // Close immediately on terminal status so EventSource stops
+        // auto-reconnecting. Without this the browser keeps reconnecting
+        // after the server closes the stream, fires onerror 4 times, and
+        // triggers onConnectionError — showing a spurious "Network error"
+        // after a successful download.
+        if (parsed.data.status === 'completed' || parsed.data.status === 'failed') {
+          es.close()
+        }
       }
     } catch {
       // ignore malformed chunks
@@ -517,6 +525,9 @@ export function subscribeToConversionProgress(
       if (parsed.success) {
         consecutiveErrors = 0
         onProgress(parsed.data)
+        if (parsed.data.status === 'completed' || parsed.data.status === 'failed') {
+          es.close()
+        }
       }
     } catch {
       // ignore malformed chunks
